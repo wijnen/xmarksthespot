@@ -1,0 +1,627 @@
+#!/usr/bin/env python
+
+'''
+Wherigo cartridge player.
+
+Game screens:
+- map with location, visible items, characters and zones. can be zoomed and panned.
+- compass with target arrow(s)
+- inventory
+- item detail (possibly on same screen as inventory)
+- task list
+- task detail (possibly on same screen as task list)
+- dialogs and messages: both multiple simultaneously.
+'''
+
+import lua
+import re
+import gps
+import gtk
+import gwc
+import sys
+import wherigo
+import Map
+import gst
+
+def backtrace ():
+	sys.stderr.write ('=' * 78 + '\n')
+	try:
+		d = 0
+		while True:
+			frame = sys._getframe (d)
+			sys.stderr.write ('\t%s:%d %s\n' % (frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name))
+			d += 1
+	except ValueError:
+		pass
+	sys.stderr.write ('=' * 78 + '\n')
+
+minloglevel = wherigo.LOGDEBUG
+
+class Position:
+	def __init__ (self, lat = None, lon = None, alt = None, speed = None, climb = None, track = None, time = None):
+		self.lat = lat
+		self.lon = lon
+		self.alt = alt
+		self.speed = speed
+		self.climb = climb
+		self.track = track
+		self.time = time
+	def __nonzero__ (self):
+		return self.time != None
+	def __str__ (self):
+		if self.time == None:
+			return 'None'
+		return 'lat:%f lon:%f alt:%f speed:%f climb:%f track:%f time:%s' % (self.lat, self.lon, self.alt, self.speed, self.climb, self.track, self.time)
+
+class GpsPoller:
+	def __init__(self):
+		self.current_value = Position ()
+		self.idle = [10, None]
+		self.session = gps.gps (mode = gps.WATCH_ENABLE)
+	def get_pos (self):
+		while self.session.waiting ():
+			value = self.session.next ()
+			# Save only position, not every event.
+			if value['class'] == 'DEVICE' and value['activated'] == 0:
+				self.current_value = Position ()
+				continue
+			if value['class'] != 'TPV':
+				continue
+			if value['mode'] == 1:
+				self.current_value = Position ()
+			else:
+				self.current_value = Position (value['lat'], value['lon'], value['alt'], value['speed'], value['climb'], value['track'], value['time'])
+		#print self.current_value
+		ret = self.current_value
+		if self.idle[1] == ret.time:
+			if self.idle[0] == 10:
+				self.idle = [10, None]
+				ret = Position ()
+				self.current_value = ret
+			else:
+				self.idle[0] += 1
+		else:
+			self.idle = [0, ret.time]
+		return ret
+
+class Detail (gtk.VBox):
+	def __init__ (self):
+		gtk.VBox.__init__ (self)
+		self.image = gtk.Image ()
+		self.pack_start (self.image, False)
+		self.text = gtk.TextView ()
+		self.text.set_wrap_mode (gtk.WRAP_WORD)
+		sw = gtk.ScrolledWindow ()
+		sw.add (self.text)
+		self.pack_start (sw, True)
+		self.buttons = gtk.HBox ()
+		self.pack_start (self.buttons, False)
+	def set (self, media, text, buttons, cb):
+		if media:
+			if media.Id in gameobject._image:
+				self.image.set_from_pixbuf (gameobject._image[media.Id])
+		else:
+			self.image.clear ()
+		self.text.get_buffer ().set_text (text)
+		self.remove (self.buttons)
+		self.buttons = gtk.HBox ()
+		self.pack_start (self.buttons, False)
+		should_fill = True
+		for b in buttons:
+			if b[1] is None:
+				# This is a text entry.
+				entry = gtk.Entry ()
+				entry.connect ('activate', cb, b[0])
+				self.buttons.pack_start (entry, True)
+				should_fill = False
+			else:
+				# This is a button.
+				button = gtk.Button (b[1])
+				button.connect ('clicked', cb, b[0])
+				self.buttons.pack_start (button, should_fill)
+		self.buttons.show_all ()
+
+class List (gtk.VBox):
+	def __init__ (self, title, signature):
+		gtk.VBox.__init__ (self)
+		self.store = gtk.ListStore (*signature)
+		self.treeview = gtk.TreeView (self.store)
+		self.column = gtk.TreeViewColumn (title)
+		self.treeview.append_column (self.column)
+		self.renderer = gtk.CellRendererText ()
+		self.column.pack_start (self.renderer, True)
+		self.column.add_attribute (self.renderer, 'text', 0)
+		self.treeview.set_search_column (0)
+		self.column.set_sort_column_id (0)
+		self.treeview.set_reorderable (True)
+		self.treeview.get_selection ().connect ('changed', self.selection_changed)
+		self.pack_start (self.treeview, False)
+		self.pack_start (gtk.HSeparator (), False)
+		self.details = Detail ()
+		self.pack_start (self.details, True)
+	def _find (self, model, path, iter, data):
+		if model.get_value (iter, 0) == data[0]:
+			data[1] = iter
+			return True
+	def select (self, item):
+		data = [item, None]
+		self.store.foreach (self._find, data)
+		if data[1] == None:
+			return
+		self.treeview.get_selection ().select_iter (data[1])
+	def selection_changed (self, selection):
+		# Update details according to new selection.
+		i = selection.get_selected ()[1]
+		if i:
+			item = self.store.get_value (i, 1)
+			media = item.Media
+			text = item.Description
+			buttons = []
+			for c in item.Commands:
+				cmd = item.Commands[c]
+				if not cmd.Enabled:
+					continue
+				t = cmd.Text
+				if cmd.CmdWith:
+					if cmd.WorksWithAll:
+						for i in gameobject.AllZObjects:
+							if (isinstance (i, wherigo.ZCharacter) or isinstance (i, wherigo.ZItem)) and i.Visible:
+								break
+						else:
+							t = cmd.EmptyTargetListText
+					else:
+						for i in cmd.WorksWithList:
+							target = cmd.WorksWithList[i]
+							if target.Visible:
+								break
+						else:
+							t = cmd.EmptyTargetListText
+				buttons += (((c, item), t),)
+		else:
+			item = None
+			media = None
+			text = ''
+			buttons = []
+		self.details.set (media, text, buttons, self._button)
+		# Update markers on map, if any.
+		self._update_map (item)
+	def _button (self, widget, name):
+		attr = 'On' + name[0]
+		if hasattr (name[1], attr):
+			getattr (name[1], attr) (name[1])
+		# TODO
+	def _update_map (self, item):
+		# Overloaded from Lists which need it.
+		pass
+	def update (self):
+		keys, full = self.makelist ()
+		# Step 1: remove all items that should not be present.
+		current = self.store.get_iter_first ()
+		while current:
+			next = self.store.iter_next (current)
+			k = self.store.get_value (current, 0)
+			if k not in keys:
+				self.store.remove (current)
+			else:
+				i = keys.index (k)
+				keys.pop (i)
+				full.pop (i)
+			current = next
+		# Step 2: add all missing items
+		for f in full:
+			self._add (*f)
+	def _add (self, summary, info):
+		# Overload this to do more.
+		self.store.append ((summary, info))
+
+class MarkerList (List):
+	'''A list with links to markers on the map'''
+	def __init__ (self, map, desc, layers):
+		List.__init__ (self, desc, (str, object))
+		self.map = map
+		self.layers = layers
+		self.selected = None
+	def _add (self, summary, info):
+		self.store.append ((summary, info))
+		pos = self._get_pos (info)
+		if not pos:
+			info._id = None
+			print ('not adding %s to map: no position' % summary)
+			return
+		layer = self._get_layer (info)
+		info._id = len (self.layers[layer].markers)
+		self.layers[layer].markers += ([(pos.latitude, pos.longitude), 0, info],)
+		self.map.update ()
+	def _get_pos (self, info):
+		# Overloadable.
+		return info.ObjectLocation
+	def _get_layer (self, info):
+		# Overloadable for multi-layer lists.
+		return 0
+	def _update_map (self, item):
+		if self.selected is not None and self.selected._id is not None:
+			layer = self._get_layer (self.selected)
+			self.layers[layer].markers[self.selected._id][1] = 0
+		if item is not None and item._id is not None:
+			layer = self._get_layer (item)
+			self.layers[layer].markers[item._id][1] = 1
+		self.selected = item
+		self.map.update ()
+
+class Locations (MarkerList):
+	# Compass and list of locations; selected location is shown on compass.
+	def __init__ (self, layer):
+		MarkerList.__init__ (self, layer.map, 'Location', (layer,))
+	def _get_pos (self, info):
+		return info.OriginalPoint
+	def add_location (self, summary, info):
+		self._add (summary, info)
+	def makelist (self):
+		kret = []
+		fret = []
+		for i in gameobject.AllZObjects:
+			if isinstance (i, wherigo.Zone) and i.Active and i.Visible:
+				kret += (i.Name,)
+				fret += ((i.Name, i,),)
+		return kret, fret
+	def _update_map (self, item):
+		# Add zone boundary for selected zone.
+		if item is None or item._id is None:
+			self.layers[0].tracks = []
+		else:
+			track = [(x.latitude, x.longitude) for x in lua.as_list (item.Points)]
+			track += (track[0],)
+			self.layers[0].tracks = [track]
+		# Do all the usual stuff.
+		MarkerList._update_map (self, item)
+
+class Inventory (List):
+	def __init__ (self):
+		List.__init__ (self, 'Item', (str, object))
+	def add_item (self, name, info):
+		self.store.append ((name, info))
+	def makelist (self):
+		kret = []
+		fret = []
+		for i in gameobject.AllZObjects:
+			if isinstance (i, wherigo.ZItem) and i.Visible and i.Container == wherigo.Player:
+				kret += (i.Name,)
+				fret += ((i.Name, i,),)
+		return kret, fret
+
+class Environment (MarkerList):
+	def __init__ (self, objlayer, charlayer):
+		MarkerList.__init__ (self, objlayer.map, 'Item or person', (objlayer, charlayer))
+	def add_item (self, name, info):
+		self._add (name, info)
+	def add_person (self, name, info):
+		self._add (name, info)
+	def _get_layer (self, info):
+		return 1 if isinstance (info, wherigo.ZCharacter) else 0
+	def makelist (self):
+		kret = []
+		fret = []
+		for i in gameobject.AllZObjects:
+			if ((isinstance (i, wherigo.ZItem) and i.Container != wherigo.Player) or isinstance (i, wherigo.ZCharacter)) and i.Visible:
+				kret += (i.Name,)
+				fret += ((i.Name, i,),)
+		return kret, fret
+
+class Tasks (List):
+	def __init__ (self):
+		List.__init__ (self, 'Task', (str, object))
+	def add_task (self, summary, info):
+		self.store.append ((summary, info))
+	def makelist (self):
+		kret = []
+		fret = []
+		for i in gameobject.AllZObjects:
+			if isinstance (i, wherigo.ZTask) and i.Active and i.Visible:
+				kret += (i.Name,)
+				fret += ((i.Name, i,),)
+		return kret, fret
+
+class CB:
+	pipeline = None
+	def dialog (self, table):
+		global queue
+		self.update ()
+		queue_reset ()
+		for m in lua.as_list (table):
+			queue += (m,)
+		next_message ()
+		self.update ()
+	def message (self, table):
+		global queue
+		self.update ()
+		queue_reset ()
+		queue += (table,)
+		next_message ()
+		self.update ()
+	def get_input (self, zinput):
+		global queue
+		self.update ()
+		queue_reset ()
+		queue += (zinput,)
+		next_message ()
+		self.update ()
+	def play (self, media):
+		self.stop_sound ()	# includes update.
+		if media.Id not in gameobject._sound:
+			return
+		self.pipeline = gst.Pipeline ("pipeline")
+		source = gst.element_factory_make ("appsrc", "source")
+		self.pipeline.add (source)
+		decoder = gst.element_factory_make ("decodebin", "decoder")
+		self.pipeline.add (decoder)
+		converter = gst.element_factory_make ("audioconvert", "converter")
+		self.pipeline.add (converter)
+		sink = gst.element_factory_make ("alsasink", "sink")
+		self.pipeline.add (sink)
+		source.link (decoder)
+		decoder.link (converter)
+		converter.link (sink)
+		source.emit ('push-buffer', gameobject._sound[media.Id])
+		self.pipeline.set_state (gst.STATE_PLAYING)
+	def stop_sound (self):
+		self.update ()
+		if self.pipeline:
+			self.pipeline.set_state (gst.STATE_READY)
+			self.pipeline = None
+	def set_status (self, text):
+		self.update ()
+		statusbar.pop (statuscontext)
+		statusbar.push (statuscontext, text)
+	def save (self):
+		self.update ()
+		# TODO
+	def quit (self):
+		self.update ()
+		gtk.main_quit ()
+	def drive_to (self):
+		self.update ()
+		# which is?
+		# TODO
+	def alert (self):
+		self.update ()
+		print 'alert!'
+		gtk.gdk.display_get_default ().beep ()
+	def log (self, level, levelname, text):
+		self.update ()
+		if level >= minloglevel:
+			print 'Log %s: %s' % (levelname, text)
+	def show (self, screen, item):
+		# 'Detail', 'Inventory', 'Item', 'Location', 'Main', 'Tasks'
+		self.update ()
+		if screen == wherigo.DETAILSCREEN:
+			if isinstance (item, wherigo.ZCharacter):
+				notebook.set_current_page (notebook.page_num (environmentscreen))
+				environmentscreen.select (item)
+			if isinstance (item, wherigo.Zone):
+				notebook.set_current_page (notebook.page_num (locationscreen))
+				locationscreen.select (item)
+			if isinstance (item, wherigo.ZItem):
+				if item.Container == wherigo.Player:
+					notebook.set_current_page (notebook.page_num (inventoryscreen))
+					inventoryscreen.select (item)
+				else:
+					notebook.set_current_page (notebook.page_num (environmentscreen))
+					environmentscreen.select (item)
+			if isinstance (item, wherigo.ZTask):
+				notebook.set_current_page (notebook.page_num (taskscreen))
+				taskscreen.select (item)
+		elif screen == wherigo.INVENTORYSCREEN:
+			notebook.set_current_page (notebook.page_num (inventoryscreen))
+		elif screen == wherigo.ITEMSCREEN:
+			notebook.set_current_page (notebook.page_num (environmentscreen))
+		elif screen == wherigo.LOCATIONSCREEN:
+			notebook.set_current_page (notebook.page_num (locationscreen))
+		elif screen == wherigo.MAINSCREEN:
+			notebook.set_current_page (notebook.page_num (locationscreen))
+		elif screen == wherigo.TASKSCREEN:
+			notebook.set_current_page (notebook.page_num (taskscreen))
+	def update (self):
+		locationscreen.update ()
+		inventoryscreen.update ()
+		environmentscreen.update ()
+		taskscreen.update ()
+
+def next_message (widget = None, name = None):
+	global queue, current_msg, last_screen
+	if current_msg is not None:
+		# Fire event for previous message
+		attr = 'On' + (current_msg[0] if current_msg[0] is not None else name[0])
+		arg = (name[1] if name is not None else widget.get_text () if widget else None)
+		if hasattr (current_msg[1], attr):
+			getattr (current_msg[1], attr) (current_msg[1], arg)
+		current_msg = None
+	if len (queue) == 0:
+		notebook.set_current_page (last_screen)
+		message.hide ()
+		return
+	info = queue.pop (0)
+	if isinstance (info, wherigo.ZInput):
+		if 'Media' in dir (info):
+			media = info.Media
+		else:
+			media = None
+		text = info.Text
+		if info.InputType == 'MultipleChoice':
+			buttons = [(x, x) for x in lua.as_list (info.Choices)]
+		elif info.InputType == 'Text':
+			buttons = [(None, None)]
+		else:
+			raise AssertionError ('unknown input type')
+		current_msg = ('GetInput', info)
+	else:
+		if 'Media' in info:
+			media = info['Media']
+		else:
+			media = None
+		text = info['Text']
+		if 'Buttons' in info:
+			buttons = [(x, x) for x in lua.as_list (info['Buttons'])]
+		else:
+			buttons = [('Ok', 'Ok')]
+		current_msg = ('Click', info)
+	message.set (media, text, buttons, next_message)
+	message.show ()
+	p = notebook.get_current_page ()
+	if p != notebook.page_num (message):
+		last_screen = p
+	notebook.set_current_page (notebook.page_num (message))
+
+def queue_reset ():
+	global queue
+	if len (queue) == 0:
+		return
+	queue = []
+	message.hide ()
+
+queue = []
+current_msg = None
+gwcfile = '/home/shevek/src/git/wherpygo/wdyg_scharlakenbos.gwc'
+game = gwc.cartridge (gwcfile)
+map = Map.Map (game.latitude, game.longitude)	# degrees
+map.set_zoom (100000)	# pixels per degree. 1 degree is about 100 km.
+map.add_layer (Map.MapLayer (map))
+map.add_layer (Map.GridLayer (map, '#ccc'))
+zones = Map.MarkerLayer (map, ('#00f'))
+map.add_layer (zones)
+objects = Map.MarkerLayer (map, ('#0f0'))
+map.add_layer (objects)
+characters = Map.MarkerLayer (map, ('#f00'))
+map.add_layer (characters)
+position = Map.PositionLayer (map, ('#000'))
+map.add_layer (position)
+
+win = gtk.Window ()
+win.connect ('destroy', gtk.main_quit)
+vbox = gtk.VBox ()
+win.add (vbox)
+box = gtk.HPaned ()
+vbox.pack_start (box)
+statusbar = gtk.Statusbar ()
+vbox.pack_start (statusbar, False)
+statuscontext = statusbar.get_context_id ('status')
+statusbar.push (statuscontext, '')
+notebook = gtk.Notebook ()
+notebook.set_show_tabs (True)
+box.add1 (map)
+box.add2 (notebook)
+
+locationscreen = Locations (zones)
+notebook.append_page (locationscreen, gtk.Label ("Locations"))
+inventoryscreen = Inventory ()
+notebook.append_page (inventoryscreen, gtk.Label ("Inventory"))
+environmentscreen = Environment (objects, characters)
+notebook.append_page (environmentscreen, gtk.Label ("Environment"))
+taskscreen = Tasks ()
+notebook.append_page (taskscreen, gtk.Label ("Tasks"))
+message = Detail ()
+notebook.append_page (message, gtk.Label ("Message"))
+win.show_all ()
+last_screen = notebook.page_num (environmentscreen)
+locationscreen.hide ()
+inventoryscreen.hide ()
+environmentscreen.hide ()
+taskscreen.hide ()
+# Only the message tab is still available.
+
+device = GpsPoller ()
+def update ():
+	p = device.get_pos ()
+	if p:
+		position.markers = [[(p.lat, p.lon), 1]]
+		wherigo.Player.ObjectLocation = wherigo.ZonePoint (p.lat, p.lon, p.alt)
+	else:
+		wherigo.Player.ObjectLocation = wherigo.ZonePoint (gameobject.StartingLocation.latitude, 6.625234, 0)
+	if True:
+		for i in gameobject.AllZObjects:
+			# Update all object distances and bearings.
+			if (isinstance (i, wherigo.ZItem) and i.Container is not wherigo.Player) or isinstance (i, wherigo.ZCharacter):
+				i.CurrentDistance, i.CurrentBearing = wherigo.VectorToPoint (wherigo.Player.ObjectLocation, i)
+			# Update container info, and call OnEnter or OnExit.
+			elif isinstance (i, wherigo.Zone):
+				if i._active != i.Active:
+					# TODO: Doing this here means that OnSetActive fires after the lua callback has returned. Setting a zone active and immediately inactive doesn't make it fire, while it should make it fire twice.
+					i._active = i.Active
+					if hasattr (i, 'OnSetActive'):
+						i.OnSetActive (i)
+				if not i.Active:
+					continue
+				inside = wherigo.IsPointInZone (wherigo.Player.ObjectLocation, i)
+				if inside != i._inside:
+					i._inside = inside
+					if inside and hasattr (i, 'OnEnter'):
+						i.OnEnter (i)
+					elif not inside and hasattr (i, 'OnExit'):
+						i.OnExit (i)
+				if inside:
+					i.State = 'Inside'
+				else:
+					# See how close we are.
+					i.CurrentDistance, i.CurrentBearing = wherigo.VectorToZone (wherigo.Player.ObjectLocation, i)
+					if i.CurrentDistance < i.ProximityRange:
+						i.State = 'Proximity'
+					elif i.DistanceRange == -1 or i.CurrentDistance < i.DistanceRange:
+						i.State = 'Distant'
+					else:
+						i.State = 'NotInRange'
+					if i.State != i._state:
+						i._state = i.State
+						attr = 'On' + i.State
+						if hasattr (i, attr):
+							getattr (i, attr) (i)
+	else:
+		position.markers[0][1] = 0
+	cbs.update ()
+	return True
+gtk.timeout_add (500, update)
+
+script = lua.lua ()
+script.module ('Wherigo', wherigo)
+script.run ('', 'Env', {
+	'Platform': 'Python',
+	'CartFolder': '/whatever',
+	'SyncFolder': '/whatever',
+	'PathSep': '/',
+	'DeviceID': 'python-id',
+	'Version': '2.11-compatible',
+	'CartFilename': gwcfile,
+	'LogFolder': '/whatever',
+	'Downloaded': 0,
+	'Device': game.device})
+cbs = CB ()
+wherigo._setup (game, cbs)
+gameobject = script.run (game.data[0])[0]
+wherigo._finish_setup (gameobject)
+
+def start_game (widget = None, name = None):
+	locationscreen.show ()
+	inventoryscreen.show ()
+	environmentscreen.show ()
+	taskscreen.show ()
+	notebook.set_current_page (last_screen)
+	message.hide ()
+	if gameobject.OnStart:
+		"""
+		script.run ('''
+function dump (x)
+	print (pr (debug.getinfo (2)))
+	local a = 1
+	while true do
+		local name, value = debug.getlocal(2, a)
+		if not name then break end
+		print (name, pr (value))
+		a = a + 1
+	end
+end
+debug.sethook (dump, "", 1)
+''', 'pr', lambda x: repr (x))
+		print ('set debug')"""
+		gameobject.OnStart ()
+		cbs.update ()
+message.set (gameobject.Media, 'Please go to the starting point and press ok. The starting point for this cartridge is defined as follows: ' + gameobject.StartingLocationDescription, (('Ok', 'Ok'),), start_game)
+cbs.update ()
+gtk.main ()
