@@ -91,6 +91,7 @@ class Detail (gtk.VBox):
 		self.pack_start (self.image, False)
 		self.text = gtk.TextView ()
 		self.text.set_wrap_mode (gtk.WRAP_WORD)
+		self.text.set_editable (False)
 		sw = gtk.ScrolledWindow ()
 		sw.add (self.text)
 		self.pack_start (sw, True)
@@ -102,7 +103,7 @@ class Detail (gtk.VBox):
 				self.image.set_from_pixbuf (gameobject._image[media.Id])
 		else:
 			self.image.clear ()
-		self.text.get_buffer ().set_text (text)
+		self.text.get_buffer ().set_text (re.sub ('<br>', '\n', re.sub ('\s+', ' ', text, 0, re.DOTALL), 0, re.IGNORECASE | re.DOTALL))
 		self.remove (self.buttons)
 		self.buttons = gtk.HBox ()
 		self.pack_start (self.buttons, False)
@@ -534,9 +535,6 @@ def update ():
 	if p:
 		position.markers = [[(p.lat, p.lon), 1]]
 		wherigo.Player.ObjectLocation = wherigo.ZonePoint (p.lat, p.lon, p.alt)
-	else:
-		wherigo.Player.ObjectLocation = wherigo.ZonePoint (gameobject.StartingLocation.latitude, 6.625234, 0)
-	if True:
 		for i in gameobject.AllZObjects:
 			# Update all object distances and bearings.
 			if (isinstance (i, wherigo.ZItem) and i.Container is not wherigo.Player) or isinstance (i, wherigo.ZCharacter):
