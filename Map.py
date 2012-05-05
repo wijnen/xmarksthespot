@@ -14,21 +14,29 @@ class Layer:
 		self.map = map
 		self.color = color
 	def _realize (self, window):
-		self.gc = gtk.gdk.GC (window)
-		self.gc.set_foreground (gtk.gdk.colormap_get_system ().alloc_color (self.color))
-	def draw_marker (self, pos, active = False):
+		self.gc = [gtk.gdk.GC (window) for t in range (2)]
+		c = gtk.gdk.colormap_get_system ().alloc_color (self.color)
+		for t in range (2):
+			self.gc[t].set_foreground (c)
+		self.gc[1].set_dashes (0, (3, 4))
+		self.gc[1].set_line_attributes (1, gtk.gdk.LINE_ON_OFF_DASH, gtk.gdk.CAP_BUTT, gtk.gdk.JOIN_BEVEL)
+	def draw_marker (self, pos, details):
 		p = self.map.pixel (pos)
+		gc = self.gc[0 if details[1] else 1]
 		#print ('drawing marker at %s = %s' % (','.join (deg (pos)), str (p)))
-		self.map.buffer.draw_line (self.gc, p[0], p[1] - 5, p[0], p[1] - 15)
-		self.map.buffer.draw_line (self.gc, p[0], p[1] + 5, p[0], p[1] + 15)
-		self.map.buffer.draw_line (self.gc, p[0] - 5, p[1], p[0] - 15, p[1])
-		self.map.buffer.draw_line (self.gc, p[0] + 5, p[1], p[0] + 15, p[1])
-		if active:
-			self.map.buffer.draw_arc (self.gc, False, p[0] - 10, p[1] - 10, 20, 20, 0, 64 * 360)
+		self.map.buffer.draw_line (gc, p[0], p[1] - 5, p[0], p[1] - 15)
+		self.map.buffer.draw_line (gc, p[0], p[1] + 5, p[0], p[1] + 15)
+		self.map.buffer.draw_line (gc, p[0] - 5, p[1], p[0] - 15, p[1])
+		self.map.buffer.draw_line (gc, p[0] + 5, p[1], p[0] + 15, p[1])
+		if details[0]:
+			self.map.buffer.draw_arc (gc, False, p[0] - 10, p[1] - 10, 20, 20, 0, 64 * 360)
+	def boundingbox (self, box):
+		return box
 
 class Map (gtk.DrawingArea):
 	def __init__ (self, lat, lon):
 		gtk.DrawingArea.__init__ (self)
+		self.force_position = None
 		self.size = None
 		self.buffer = None
 		self.connect_after ('realize', self.realize)
@@ -102,18 +110,29 @@ class Map (gtk.DrawingArea):
 		self.buffer = gtk.gdk.Pixmap (self.get_window (), width, height)
 		self.update ()
 	def scroll (self, widget, event):
+		part = .25	# When using scroll events, scroll this amount of the width or height per event.
 		if event.direction == gtk.gdk.SCROLL_UP:
-			dir = (0, -1)
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0] - (self.pos[0] - zero[0]) * part, self.pos[1])
 		elif event.direction == gtk.gdk.SCROLL_DOWN:
-			dir = (0, 1)
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0] + (self.pos[0] - zero[0]) * part, self.pos[1])
 		elif event.direction == gtk.gdk.SCROLL_LEFT:
-			dir = (-1, 0)
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0], self.pos[1] - (self.pos[1] - zero[1]) * part)
 		elif event.direction == gtk.gdk.SCROLL_RIGHT:
-			dir = (1, 0)
-		# TODO
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0], self.pos[1] + (self.pos[1] - zero[1]) * part)
+		self.update ()
 	def button_press (self, widget, event):
 		'''Zoom in (button 1) or out (button 3) around the clicked spot'''
+		self.grab_focus ()
 		if event.button == 1:
+			if event.state & gtk.gdk.CONTROL_MASK:
+				# Clicking with control will send the coordinate back to the application.
+				# This can be used to force the application to behave as if the user is at this position.
+				self.force_position = self.position ((event.x, event.y))
+				return
 			factor = 2
 		elif event.button == 3:
 			factor = .5
@@ -125,8 +144,51 @@ class Map (gtk.DrawingArea):
 		x = self.pixel (spot)
 		self.pos = self.position ([x[i] - delta[i] for i in range (2)])
 		self.update ()
+	def get_force_position (self):
+		ret = self.force_position
+		self.force_position = None
+		return ret
 	def key_press (self, widget, event):
-		print event
+		part = .25	# When using arrow keys, scroll this amount of the width or height per key press.
+		if event.keyval == gtk.keysyms.Up:
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0] - (self.pos[0] - zero[0]) * part, self.pos[1])
+		elif event.keyval == gtk.keysyms.Down:
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0] + (self.pos[0] - zero[0]) * part, self.pos[1])
+		elif event.keyval == gtk.keysyms.Left:
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0], self.pos[1] - (self.pos[1] - zero[1]) * part)
+		elif event.keyval == gtk.keysyms.Right:
+			zero = self.position ((0, 0))
+			self.pos = (self.pos[0], self.pos[1] + (self.pos[1] - zero[1]) * part)
+		elif event.keyval == gtk.keysyms.Page_Up:
+			self.zoom *= 2.
+		elif event.keyval == gtk.keysyms.Page_Down:
+			self.zoom /= 2.
+		elif event.keyval == gtk.keysyms.Return and event.state & gtk.gdk.CONTROL_MASK:
+			self.force_position = self.pos
+		elif event.keyval == gtk.keysyms.Home and event.state & gtk.gdk.CONTROL_MASK:
+			# Fit everything to screen.
+			box = None
+			for l in self.layers:
+				box = l.boundingbox (box)
+			self.pos = ((box[0] + box[2]) / 2., (box[1] + box[3]) / 2.)
+			size = (box[2] - box[0], box[3] - box[1])
+			if size[0] == 0:
+				size = (.00001, size[1])
+			if size[1] == 0:
+				size = (size[0], .00001)
+			pixels = self.get_window ().get_size ()
+			zoomlat = pixels[1] / size[0]
+			zoomlon = pixels[0] / (size[1] * math.cos (math.radians (self.pos[0])))
+			self.zoom = min (zoomlat, zoomlon) * 0.95
+		elif event.keyval == gtk.keysyms.Home:
+			# Move view to current location.
+			if self.positionlayer and len (self.positionlayer.markers) > 0:
+				self.pos = self.positionlayer.markers[0][0]
+		self.update ()
+		return True
 
 class MapLayer (Layer):
 	'''A layer showing a map'''
@@ -154,12 +216,31 @@ class MarkerLayer (Layer):
 		for t in self.tracks:
 			pixt = [self.map.pixel (x) for x in t]
 			for p in range (len (pixt) - 1):
-				self.map.buffer.draw_line (self.gc, pixt[p][0], pixt[p][1], pixt[p + 1][0], pixt[p + 1][1])
+				self.map.buffer.draw_line (self.gc[0], pixt[p][0], pixt[p][1], pixt[p + 1][0], pixt[p + 1][1])
+	def boundingbox (self, box):
+		for m in self.markers:
+			box = self.boundingbox_add (box, m[0])
+		for t in self.tracks:
+			for p in t:
+				box = self.boundingbox_add (box, p)
+		return box
+	def boundingbox_add (self, box, point):
+		if box is None:
+			return [point[0], point[1], point[0], point[1]]
+		if box[0] > point[0]:
+			box[0] = point[0]
+		if box[1] > point[1]:
+			box[1] = point[1]
+		if box[2] < point[0]:
+			box[2] = point[0]
+		if box[3] < point[1]:
+			box[3] = point[1]
+		return box
 
 class PositionLayer (MarkerLayer):
 	'''A layer showing the current position'''
 	def __init__ (self, map, color):
 		MarkerLayer.__init__ (self, map, color)
-		self.markers = [[self.map.pos, 0]]
+		self.markers = [[self.map.pos, [False, True]]]
 		assert self.map.positionlayer == None
 		self.map.positionlayer = self

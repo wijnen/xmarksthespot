@@ -2,7 +2,9 @@
 
 import sys
 import math
+import time
 import gtk
+import gobject
 import lua
 
 INVALID_ZONEPOINT = False	# Constant representing a coordinate which does not exist, used to indicate that a variable should not hold a real value.
@@ -22,43 +24,14 @@ LOGWARNING = 3		# For log messages, indicates the message is a Warning, but not 
 LOGERROR = 4		# For log messages, indicates the message is an Error.
 _log_names = ('DEBUG', 'CARTRIDGE', 'INFO', 'WARNING', 'ERROR')
 
-# Globals to hold some info which is given by the calling system.
-_cartridge = {}
-_cb = None
-
-# This global is required by the system. It is created in the ZCartridge constructor.
+# This global is required by the system. It is created in ZCartridge._setup.
 Player = None
-
-# Function called by python code to set everything up.
-def _setup (cartridge, cb):
-	global _cartridge, _cb
-	_cartridge = cartridge
-	_cb = cb
-
-# Function called by python after the lua bytecode is executed.
-def _finish_setup (cartridge):
-	# Set up media.
-	for i in cartridge.AllZObjects:
-		if not isinstance (i, ZMedia) or i._id < 1:
-			continue
-		r = lua.as_list (i.Resources)[0]
-		if r['Type'] in ('wav', 'mp3'):
-			cartridge._sound[i.Id] = _cartridge.data[i._id]
-		else:
-			px = gtk.gdk.PixbufLoader ()
-			px.write (_cartridge.data[i._id])
-			px.close ()
-			cartridge._image[i.Id] = px.get_pixbuf ()
 
 # Class definitions. All these classes are used by lua code and can be inspected and changed by both lua and python code.
 class Bearing:
 	'A direction from one point to another, in degrees. 0 means north, 90 means east.'
 	def __init__ (self, value):
-		while value < 0:
-			value += 360
-		while value >= 360:
-			value -= 360
-		self.value = value
+		self.value = value % 360
 	def __repr__ (self):
 		return 'Bearing (%f)' % self.value
 
@@ -77,15 +50,15 @@ class Distance:
 			self.value = value * 1852.
 		else:
 			raise AssertionError ('invalid length unit %s' % unit)
-	def GetValue (self, unit = 'meters'):
-		if unit == 'feet':
-			return value / 1609.344 * 5280.
+	def GetValue (self, luaself, unit = 'meters'):
+		if unit in ('feet', 'ft'):
+			return self.value / 1609.344 * 5280.
 		elif unit == 'miles':
-			return value / 1609.344
-		elif unit == 'meters':
-			return value
-		elif unit == 'kilometers':
-			return value / 1000.
+			return self.value / 1609.344
+		elif unit in ('meters', 'm'):
+			return self.value
+		elif unit in ('kilometers', 'km'):
+			return self.value / 1000.
 		elif unit == 'nauticalmiles':
 			return self.value / 1852.
 		else:
@@ -103,8 +76,9 @@ class ZCommand:
 	def __repr__ (self):
 		return '<ZCommand\n\t' + '\n\t'.join (['%s:%s' % (x, str (getattr (self, x))) for x in dir (self) if not x.startswith ('_')]) + '\n>'
 
-class ZObject:
+class ZObject (object):
 	def __init__ (self, cartridge, container = None):
+		self.Active = True
 		self.Cartridge = cartridge
 		self.Container = container
 		self.Commands = []
@@ -141,64 +115,99 @@ class ZReciprocalCommand (ZObject):
 
 # All the following classes implement the ZObject interface.
 class ZCartridge (ZObject):
+	_instance = None
+	def __new__ (cls, *a, **aa):
+		if cls._instance is None:
+			cls._instance = super (ZCartridge, cls).__new__ (cls, *a, **aa)
+			cls._instance.AllZObjects = [] # This must be done before ZObject.__init__, because that registers this object.
+			ZObject.__init__ (cls._instance, cls._instance)
+			cls._instance._mediacount = -1
+			cls._instance.Activity = 'Undefined'
+			cls._instance.Author = 'Undefined'
+			cls._instance.BuilderVersion = None
+			cls._instance.Company = None
+			cls._instance.Complete = False
+			cls._instance.CountryId = 0
+			cls._instance.CreateDate = None
+			cls._instance.Description = 'Undefined'
+			cls._instance.Icon = ZMedia (cls._instance)
+			cls._instance.Icon.Id = None
+			cls._instance.Id = 'Undefined'
+			cls._instance.LastPlayedDate = None
+			cls._instance.Media = ZMedia (cls._instance)
+			cls._instance.Media.Id = None
+			cls._instance.MsgBoxCBFuncs = []
+			cls._instance.Name = 'Undefined'
+			cls._instance.PublishDate = None
+			cls._instance.StartingLocation = INVALID_ZONEPOINT
+			cls._instance.StartingLocationDescription = 'Undefined'
+			cls._instance.StateId = '1'
+			cls._instance.TargetDevice = 'Undefined'
+			cls._instance.TargetDeviceVersion = None
+			cls._instance.UpdateDate = None
+			cls._instance.UseLogging = False
+			cls._instance.Version = 'Undefined'
+			cls._instance.Visible = True
+			cls._instance.ZVariables = []
+			cls._instance.OnEnd = None
+			cls._instance.OnRestore = None
+			cls._instance.OnStart = None
+			cls._instance.OnSync = None
+		return cls._instance
 	def __init__ (self):
+		pass
+	def RequestSync (self, luaself):
+		self._cb.save ()
+	def _setup (self, cart, cbs, script):
 		global Player
-		self.AllZObjects = []	# This must be done before ZObject.__init__, because that registers this object.
-		ZObject.__init__ (self, self)
-		self._mediacount = -1
-		self.Activity = _cartridge.gametype
-		self.Author = _cartridge.author
-		self.BuilderVersion = None
-		self.Company = None
-		self.Complete = False
-		self.CountryId = 0
-		self.CreateDate = None
-		self.Description = _cartridge.description
-		self.Icon = ZMedia (self)
-		self.Icon.Id = _cartridge.iconId
-		self.Id = _cartridge.guid
-		self.LastPlayedDate = None
-		self.Media = ZMedia (self)
-		self.Media.Id = _cartridge.splashId
-		self.MsgBoxCBFuncs = []
-		self.Name = _cartridge.name
-		self.PublishDate = None
-		self.StartingLocation = ZonePoint (_cartridge.latitude, _cartridge.longitude, _cartridge.altitude)
-		self.StartingLocationDescription = _cartridge.startdesc
-		self.StateId = 1
-		self.TargetDevice = _cartridge.device
-		self.TargetDeviceVersion = None
-		self.UpdateDate = None
-		self.UseLogging = False
-		self.Version = _cartridge.version
-		self.Visible = True
-		self.ZVariables = []
-		self.OnEnd = None
-		self.OnRestore = None
-		self.OnStart = None
-		self.OnSync = None
-		Player = ZCharacter (self)
-		# Player should not be in the list, and it should have a negative index.
-		Player.ObjIndex = -1
-		self.AllZObjects.pop ()
+		self.Activity = cart.gametype
+		self.Author = cart.author
+		self.Description = cart.description
+		self.Icon.Id = cart.iconId
+		self.Id = cart.guid
+		self.Media.Id = cart.splashId
+		self.Name = cart.name
+		self.StartingLocation = ZonePoint (cart.latitude, cart.longitude, cart.altitude)
+		self.StartingLocationDescription = cart.startdesc
+		self.TargetDevice = cart.device
+		self.Version = cart.version
 		self._mediacount = 1
 		self._image = {}
 		self._sound = {}
-	def RequestSync (self, *a):
-		print a, self, sys._getframe().f_code.co_name
-		# TODO: save
-		if self.OnSync:
-			self.OnSync ()
+		self._cb = cbs
+		# According to the wiki, both the global "Player" and "wherigo.Player" should be a reference to the current player.
+		# For technical reasons, the python value wherigo.Player is not available in lua without the statement below.
+		Player = ZCharacter (self)
+		# Player should not be in the list, and it should have a negative index.
+		Player.ObjIndex = -1
+		Player.Name = cart.user
+		Player.CompletionCode = cart.completion_code
+		script.run ('Wherigo.Player = Player', 'Player', Player, 'setting Player variables')
+		self.AllZObjects.pop ()
+		ret = script.run (cart.data[0])[0]
+		# Set up media.
+		for i in self.AllZObjects:
+			if not isinstance (i, ZMedia) or i._id < 1:
+				continue
+			r = lua.as_list (i.Resources)[0]
+			if r['Type'] in ('wav', 'mp3'):
+				self._sound[i.Id] = cart.data[i._id]
+			else:
+				px = gtk.gdk.PixbufLoader ()
+				px.write (cart.data[i._id])
+				px.close ()
+				self._image[i.Id] = px.get_pixbuf ()
+		return ret
 
 class ZCharacter (ZObject):
 	def __init__ (self, cartridge):
 		#print 'making character'
 		ZObject.__init__ (self, cartridge)
-		self.name = _cartridge.user
+		self.name = 'Unnamed character'
 		self.InsideOfZones = []
 		self.Inventory = []
 		self.ObjectLocation = INVALID_ZONEPOINT
-		self.PositionAccuracy = Distance (0)
+		self.PositionAccuracy = Distance (5)
 		self.Visible = False
 
 class ZTimer (ZObject):
@@ -206,21 +215,50 @@ class ZTimer (ZObject):
 	# attributes: Type ('Countdown'|'Interval'), Duration (Number), Id, Name, Visible
 	def __init__ (self, cartridge):
 		ZObject.__init__ (self, cartridge)
-	def Start (self, arg):
-		# argument is a duplicate of self.
-		if self.Type == 'Countdown':
-			pass
-		elif self.Type == 'Interval':
-			pass
-		else:
-			raise AssertionError ('unknown timer type %s' % self.Type)
+		self.Type = 'Countdown'
+		self.Duration = -1
+		self.Remaining = -1
+		self.OnStart = None
+		self.OnStop = None
+		self.OnTick = None
+		self._target = None	# time for next tick, or None.
+		self._source = None
+	def Start (self, luaself):
+		if self._target is not None:
+			print 'Not starting timer: already running.'
+			return
+		if self.OnStart:
+			self.OnStart (self)
 		#print 'Timer started, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')])
-	def Stop (self, arg):
+		if self.Remaining < 0:
+			self.Remaining = self.Duration
+		self._source = gobject.timeout_add (int (self.Remaining * 1000), self.Tick, self)
+		self._target = time.time () + self.Duration
+	def Stop (self, luaself):
+		if self._target is None:
+			print 'Not stopping timer: not running.'
+			return
+		gobject.source_remove (self._source)
+		self._target = None
+		self._source = None
+		if self.OnStop:
+			self.OnStop (self)
 		#print 'Timer stopped, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')])
-		pass
-	def Tick (self, *a):
-		#print 'Timer ticked, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')]), a
-		pass
+	def Tick (self, luaself):
+		if self.Type == 'Interval':
+			self._target += self.Duration
+			now = time.time ()
+			if self._target < now:
+				self._target = now
+			self._source = gobject.timeout_add (int ((self._target - now) * 1000), self.Tick, self)
+		else:
+			self._target = None
+			self._source = None
+			self.Remaining = -1
+		if self.OnTick:
+			self.OnTick (self)
+		#print 'Timer ticked, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')])
+		return False
 
 class ZInput (ZObject):
 	'A user input field.'
@@ -259,34 +297,34 @@ class ZMedia (ZObject):
 # These functions are called from lua to make the application do things.
 def Dialog (table):
 	'Displays a dialog to the user. Parameter table may include two named values: Text, a string value containing the message to display; and Media, a ZMedia object to display in the dialog.'
-	_cb.dialog (table)
+	ZCartridge ()._cb.dialog (table)
 
 def MessageBox (table):
 	'Displays a dialog to the user with the possibility of user actions triggering additional events. Parameter table may take four named values: Text, a string value containing the message to display; Media, a ZMedia object to display in the dialog; Buttons, a table of strings to display as button options for the user; and Callback, a function reference to a function taking one parameter, the name of the button the user pressed to dismiss the dialog.'
-	_cb.message (table)
+	ZCartridge ()._cb.message (table)
 
 def GetInput (inp):
 	'Displays the provided ZInput dialog and returns the value entered or selected by the user.'
-	_cb.get_input (inp)
+	ZCartridge ()._cb.get_input (inp)
 
 def PlayAudio (media):
 	'Plays a sound file. Single parameter is a ZMedia object representing a sound file.'
-	_cb.play (media)
+	ZCartridge ()._cb.play (media)
 
 def ShowStatusText (text):
 	'Updates the status text displayed on PPC players to the specified value. At this time, the Garmin Colorado does not support status text.'
-	_cb.set_status (text)
+	ZCartridge ()._cb.set_status (text)
 
 def Command (text):
 	if text == 'SaveClose':
-		_cb.save ()
-		_cb.quit ()
+		ZCartridge ()._cb.save ()
+		ZCartridge ()._cb.quit ()
 	elif text == 'DriveTo':
-		_cb.drive_to ()
+		ZCartridge ()._cb.drive_to ()
 	elif text == 'StopSound':
-		_cb.stop_sound ()
+		ZCartridge ()._cb.stop_sound ()
 	elif text == 'Alert':
-		_cb.alert ()
+		ZCartridge ()._cb.alert ()
 	else:
 		raise AssertionError ('unknown command %s' % text)
 
@@ -298,13 +336,13 @@ def LogMessage (text, level = LOGCARTRIDGE):
 		text = text['Text']
 	level = int (level + .5)
 	assert 0 <= level < _log_names
-	_cb.log (level, _log_names[level], text)
+	ZCartridge ()._cb.log (level, _log_names[level], text)
 
 def ShowScreen (screen, item = None):
 	'Switches the currently displayed screen to one specified by the screen parameter. The several SCREEN constants defined in the Wherigo object allow the screen to be specified. If DETAILSCREEN is specified, the optional second parameter item specifies the zone, character, item, etc. to display the detail screen of.'
 	screen = int (screen + .5)
 	assert 0 <= screen < len (_screen_names)
-	_cb.show (screen, item)
+	ZCartridge ()._cb.show (screen, item)
 
 # These functions seem to be for doing dirty work which is too slow or annoying in lua...
 def NoCaseEquals (s1, s2):
@@ -352,13 +390,13 @@ def VectorToSegment (point, p1, p2):
 	'Unknown parameters and function.'
 	# Compute shortest distance and bearing to get from point to anywhere on segment.
 	d1, b1 = VectorToPoint (p1, point)
-	d1 = math.radians (d1.GetValue ('nauticalmiles') / 60.)
+	d1 = math.radians (d1.GetValue (d1, 'nauticalmiles') / 60.)
 	ds, bs = VectorToPoint (p1, p2)
 	dist = math.asin (math.sin (d1) * math.sin (math.radians (b1.value - bs.value)))
 	dat = math.acos (math.cos (d1) / math.cos (dist))
 	if dat <= 0:
 		return VectorToPoint (point, p1)
-	elif dat >= math.radians (ds.GetValue ('nauticalmiles') / 60.):
+	elif dat >= math.radians (ds.GetValue (ds, 'nauticalmiles') / 60.):
 		return VectorToPoint (point, p2)
 	intersect = TranslatePoint (p1, Distance (dat * 60, 'nauticalmiles'), bs)
 	return VectorToPoint (point, intersect)
@@ -394,12 +432,16 @@ def VectorToPoint (p1, p2):
 	return Distance (math.degrees (dist) * 60, 'nauticalmiles'), Bearing (math.degrees (bearing))
 
 def TranslatePoint (point, distance, bearing):
-	'Returns a ZonePoint object calculated by starting at the provided point and moving Distance from that point at the specified angle. Signature is zonepoint=WheriGo.TranslatePoint(startzonepoint, distance, bearing), where startzonepoint is an instance of ZonePoint, distance is an instance of Distance, and bearing is an Instance of Bearing.'
-	d = math.radians (distance.GetValue ('nauticalmiles') / 60.)
-	b = math.radians (bearing)
+	'''Returns a ZonePoint object calculated by starting at the provided point and moving Distance from that point at the specified angle.
+	Signature is zonepoint=Wherigo.TranslatePoint(startzonepoint, distance, bearing), where
+		startzonepoint is an instance of ZonePoint,
+		distance is an instance of Distance,
+		and bearing is an Instance of Bearing.'''
+	d = math.radians (distance.GetValue (distance, 'nauticalmiles') / 60.)
+	b = math.radians (bearing.value)
 	lat1 = math.radians (point.latitude)
 	lat2 = math.asin (math.sin (lat1) * math.cos (d) + math.cos (lat1) * math.sin (d) * math.cos(b))
-	dlon = math.atan2 (math.sin(b) * math.sin (d) * math.cos (lat1), math.cos (d) - math.sin (lat1) * sin (lat2))
+	dlon = math.atan2 (math.sin(b) * math.sin (d) * math.cos (lat1), math.cos (d) - math.sin (lat1) * math.sin (lat2))
 	return ZonePoint (math.degrees (lat2), point.longitude + math.degrees (dlon), point.altitude)
 
 # Test some stuff.
