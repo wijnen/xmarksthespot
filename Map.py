@@ -102,6 +102,7 @@ class Map (gtk.DrawingArea):
 		self.connect ('button-press-event', self.button_press)
 		self.connect ('scroll-event', self.scroll)
 		self.connect ('key-press-event', self.key_press)
+		self.connect ('motion-notify-event', self.motion)
 		self.pos = (lat, lon)
 		self.zoom = None
 		self.layers = []
@@ -109,7 +110,7 @@ class Map (gtk.DrawingArea):
 		self.buffer = None
 		self.gc = None
 		self.set_can_focus (True)
-		self.add_events (gtk.gdk.EXPOSURE_MASK | gtk.gdk.STRUCTURE_MASK | gtk.gdk.BUTTON_PRESS_MASK | gtk.gdk.SCROLL_MASK | gtk.gdk.KEY_PRESS_MASK)
+		self.add_events (gtk.gdk.EXPOSURE_MASK | gtk.gdk.STRUCTURE_MASK | gtk.gdk.BUTTON_PRESS_MASK | gtk.gdk.SCROLL_MASK | gtk.gdk.KEY_PRESS_MASK | gtk.gdk.BUTTON2_MOTION_MASK)
 	def add_layer (self, layer):
 		self.layers += (layer,)
 		w = self.get_window ()
@@ -191,15 +192,25 @@ class Map (gtk.DrawingArea):
 				self.force_position = self.position ((event.x, event.y))
 				return
 			factor = 2
+		elif event.button == 2:
+			self.motion_pos = event.x, event.y
+			return True
 		elif event.button == 3:
 			factor = .5
 		else:
-			return
+			return False
 		spot = self.position ((event.x, event.y))
 		delta = (event.x - self.size[0] / 2., event.y - self.size[1] / 2.)
 		self.zoom *= factor
 		x = self.pixel (spot)
 		self.pos = self.position ([x[i] - delta[i] for i in range (2)])
+		self.update ()
+	def motion (self, widget, event):
+		dx = event.x - self.motion_pos[0]
+		dy = event.y - self.motion_pos[1]
+		center = self.pixel (self.pos)
+		self.pos = self.position ((center[0] - dx, center[1] - dy))
+		self.motion_pos = event.x, event.y
 		self.update ()
 	def get_force_position (self):
 		ret = self.force_position
