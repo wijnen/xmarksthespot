@@ -23,13 +23,70 @@ class Layer:
 	def draw_marker (self, pos, details):
 		p = self.map.pixel (pos)
 		gc = self.gc[0 if details[1] else 1]
-		#print ('drawing marker at %s = %s' % (','.join (deg (pos)), str (p)))
-		self.map.buffer.draw_line (gc, p[0], p[1] - 5, p[0], p[1] - 15)
-		self.map.buffer.draw_line (gc, p[0], p[1] + 5, p[0], p[1] + 15)
-		self.map.buffer.draw_line (gc, p[0] - 5, p[1], p[0] - 15, p[1])
-		self.map.buffer.draw_line (gc, p[0] + 5, p[1], p[0] + 15, p[1])
-		if details[0]:
-			self.map.buffer.draw_arc (gc, False, p[0] - 10, p[1] - 10, 20, 20, 0, 64 * 360)
+		if 0 <= p[0] < self.map.size[0] and 0 <= p[1] < self.map.size[1]:
+			#print ('drawing marker at %s = %s' % (','.join (deg (pos)), str (p)))
+			self.map.buffer.draw_line (gc, p[0], p[1] - 5, p[0], p[1] - 15)
+			self.map.buffer.draw_line (gc, p[0], p[1] + 5, p[0], p[1] + 15)
+			self.map.buffer.draw_line (gc, p[0] - 5, p[1], p[0] - 15, p[1])
+			self.map.buffer.draw_line (gc, p[0] + 5, p[1], p[0] + 15, p[1])
+			if details[0]:
+				self.map.buffer.draw_arc (gc, False, p[0] - 10, p[1] - 10, 20, 20, 0, 64 * 360)
+		else:
+			p = [float (x) for x in p]
+			center = [float (x) for x in self.map.pixel (self.map.pos)]
+			# Draw an arrow at the border of the screen.
+			if p[0] < 0:
+				# Compute intersection on left side.
+				# Compute a and b in y = ax + b.
+				a = (p[1] - center[1]) / (p[0] - center[0])
+				b = p[1] - a * p[0]
+				# b is the intersection point.
+				if b < 0:
+					# intersection is on top side.
+					intersection = self.intersect_top (p, center)
+				elif b >= self.map.size[1]:
+					# intersection is on bottom side.
+					intersection = self.intersect_bottom (p, center)
+				else:
+					intersection = (0, b)
+			elif p[0] >= self.map.size[0]:
+				# Compute intersection on right side.
+				# Compute a and b in y = ax + b.
+				a = (p[1] - center[1]) / (p[0] - center[0])
+				b = p[1] - a * p[0]
+				point = a * self.map.size[0] + b
+				if point < 0:
+					# intersection is on top side.
+					intersection = self.intersect_top (p, center)
+				elif point >= self.map.size[1]:
+					# intersection is on bottom side.
+					intersection = self.intersect_bottom (p, center)
+				else:
+					intersection = (self.map.size[0], point)
+			elif p[1] < 0:
+				intersection = self.intersect_top (p, center)
+			else:
+				intersection = self.intersect_bottom (p, center)
+			delta = [p[t] - center[t] for t in range (2)]
+			dist = math.sqrt (sum ([delta[t] ** 2 for t in range (2)]))
+			unit = [delta[t] / dist for t in range (2)]
+			if details[0]:
+				self.map.buffer.draw_line (gc, int (intersection[0] - 20 * unit[0]), int (intersection[1] - 20 * unit[1]), int (intersection[0] - 5 * unit[0]), int (intersection[1] - 5 * unit[1]))
+				self.map.buffer.draw_line (gc, int (intersection[0] - 5 * unit[0] + 5 * unit[1]), int (intersection[1] - 5 * unit[1] - 5 * unit[0]), int (intersection[0]), int (intersection[1]))
+				self.map.buffer.draw_line (gc, int (intersection[0] - 5 * unit[0] - 5 * unit[1]), int (intersection[1] - 5 * unit[1] + 5 * unit[0]), int (intersection[0]), int (intersection[1]))
+				self.map.buffer.draw_line (gc, int (intersection[0] - 5 * unit[0] + 5 * unit[1]), int (intersection[1] - 5 * unit[1] - 5 * unit[0]), int (intersection[0] - 5 * unit[0] - 5 * unit[1]), int (intersection[1] - 5 * unit[1] + 5 * unit[0]))
+			else:
+				self.map.buffer.draw_line (gc, int (intersection[0] - 10 * unit[0]), int (intersection[1] - 10 * unit[1]), int (intersection[0]), int (intersection[1]))
+	def intersect_top (self, p, center):
+		'Prevent division by zero: swap x and y.'
+		a = (p[0] - center[0]) / (p[1] - center[1])
+		b = p[0] - a * p[1]
+		return (b, 0)
+	def intersect_bottom (self, p, center):
+		'Prevent division by zero: swap x and y.'
+		a = (p[0] - center[0]) / (p[1] - center[1])
+		b = p[0] - a * p[1]
+		return (a * self.map.size[1] + b, self.map.size[1])
 	def boundingbox (self, box):
 		return box
 

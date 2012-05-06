@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# vim: set encoding=utf-8
 
 '''
 Wherigo cartridge player.
@@ -28,7 +29,8 @@ environmentcolor = '#f00'
 inventorycolor = '#880'
 taskcolor = '#000'
 messagecolor = '#000'
-historycolor = '#ccc'
+historycolor = '#888'
+logcolor = '#080'
 timercolor = '#f0f'
 
 import lua
@@ -108,6 +110,26 @@ class GpsPoller:
 			self.idle = [0, ret.time]
 		return ret
 
+def update_title (screen):
+	t = screen.tabname
+	if screen.show_size:
+		t += ' (%d)' % screen.size
+	t = '<span foreground="%s">%s</span>' % (screen.color, t)
+	if screen.new:
+		t = '<b>' + t + '</b>'
+	screen.title.set_markup (t)
+
+def make_str (degs):
+	'Make a string value from a float degree value'
+	deg = int (degs)
+	degs -= deg
+	degs *= 60
+	min = int (degs)
+	degs -= min
+	degs *= 60
+	sec = degs
+	return '''%d°%d'%.2f"''' % (deg, min, sec)
+
 class Detail (gtk.VBox):
 	def __init__ (self):
 		gtk.VBox.__init__ (self)
@@ -180,6 +202,7 @@ class List (gtk.VBox):
 		self.pack_start (gtk.HSeparator (), False)
 		self.details = Detail ()
 		self.pack_start (self.details, True)
+		self.selected_item = None
 	def _find (self, model, path, iter, data):
 		if model.get_value (iter, 0) == data[0]:
 			data[1] = iter
@@ -194,12 +217,12 @@ class List (gtk.VBox):
 		# Update details according to new selection.
 		i = selection.get_selected ()[1]
 		if i:
-			item = self.store.get_value (i, 2)
-			media = item.Media
-			text = item.Description
+			self.selected_item = self.store.get_value (i, 2)
+			media = self.selected_item.Media
+			text = self.selected_item.Description
 			buttons = []
-			for c in item.Commands:
-				cmd = item.Commands[c]
+			for c in self.selected_item.Commands:
+				cmd = self.selected_item.Commands[c]
 				if not cmd.Enabled:
 					continue
 				t = cmd.Text
@@ -217,15 +240,15 @@ class List (gtk.VBox):
 								break
 						else:
 							t = cmd.EmptyTargetListText
-				buttons += (((c, item), t),)
+				buttons += (((c, self.selected_item), t),)
 		else:
-			item = None
+			self.selected_item = None
 			media = None
 			text = ''
 			buttons = []
 		self.details.set (media, text, buttons, self._button)
 		# Update markers on map, if any.
-		self._update_map (item)
+		self._update_map ()
 	def _button (self, widget, name):
 		attr = 'On' + name[0]
 		if hasattr (name[1], attr):
@@ -233,11 +256,15 @@ class List (gtk.VBox):
 		else:
 			print ('Command "%s" not running, because no callback was registered.' % name[0])
 		return True
-	def _update_map (self, item):
+	def _update_map (self):
 		# Overloaded from Lists which need it.
+		# Update some info here as well.
+		self.update_stats ()
+	def update_stats (self):
 		pass
 	def update (self):
 		keys, full = self.makelist ()
+		self.size = 0
 		# Step 1: remove all items that should not be present.
 		current = self.store.get_iter_first ()
 		while current:
@@ -245,13 +272,17 @@ class List (gtk.VBox):
 			k = self.store.get_value (current, 0)
 			if k not in keys:
 				self._remove_item (current)
+				self.new = True
 			else:
+				self.size += 1
 				i = keys.index (k)
 				keys.pop (i)
 				full.pop (i)
 			current = next
 		# Step 2: add all missing items
 		for f in full:
+			self.size += 1
+			self.new = True
 			self._add (*f)
 		# Step 3: update the information
 		if debug:
@@ -263,6 +294,8 @@ class List (gtk.VBox):
 				self._debug_update_map (i)
 				current = self.store.iter_next (current)
 		map.update ()
+		self.update_stats ()
+		update_title (self)
 	def _add (self, summary, color, info, active, visible):
 		# Overload this to do more.
 		self.store.append ((summary, color, info, active, visible))
@@ -278,6 +311,22 @@ class MarkerList (List):
 		self.map = map
 		self.layers = layers
 		self.selected = None
+		hbox = gtk.HBox ()
+		hbox.pack_start (gtk.Label ('Selected:'), False)
+		self.lat = gtk.Label ()
+		hbox.pack_start (self.lat, True)
+		self.lon = gtk.Label ()
+		hbox.pack_start (self.lon, True)
+		self.alt = gtk.Label ()
+		hbox.pack_start (self.alt, True)
+		self.pack_start (hbox, False)
+		hbox = gtk.HBox ()
+		hbox.pack_start (gtk.Label ('To selected:'), False)
+		self.bearing = gtk.Label ()
+		hbox.pack_start (self.bearing, True)
+		self.distance = gtk.Label ()
+		hbox.pack_start (self.distance, True)
+		self.pack_start (hbox, False)
 	def _add (self, summary, color, info, active, visible):
 		self.store.append ((summary, color, info, active, visible))
 		pos = self._get_pos (info)
@@ -292,18 +341,36 @@ class MarkerList (List):
 	def _get_pos (self, info):
 		# Overloadable.
 		return info.ObjectLocation
+	def update_stats (self):
+		if self.selected_item:
+			if self.selected_item.CurrentDistance.GetValue (self.selected_item.CurrentDistance, 'meters') < 1000:
+				diststr = '%d m' % self.selected_item.CurrentDistance.GetValue ('meters')
+			else:
+				diststr = '%.2f km' % self.selected_item.CurrentDistance.GetValue (self.selected_item.CurrentDistance, 'kilometers')
+			self.distance.set_text (diststr)
+			self.bearing.set_text ('%d°' % self.selected_item.CurrentBearing.value)
+			self.lat.set_text (make_str (self._get_pos (self.selected_item).latitude))
+			self.lon.set_text (make_str (self._get_pos (self.selected_item).longitude))
+			self.alt.set_text (make_str (self._get_pos (self.selected_item).altitude))
+		else:
+			self.distance.set_text ('-')
+			self.bearing.set_text ('-')
+			self.lat.set_text ('-')
+			self.lon.set_text ('-')
+			self.alt.set_text ('-')
 	def _get_layer (self, info):
 		# Overloadable for multi-layer lists.
 		return 0
-	def _update_map (self, item):
+	def _update_map (self):
 		if self.selected is not None and self.selected._id is not None:
 			layer = self._get_layer (self.selected)
 			self.layers[layer].markers[self.selected._id][1][0] = False
-		if item is not None and item._id is not None:
-			layer = self._get_layer (item)
-			self.layers[layer].markers[item._id][1][0] = True
-		self.selected = item
+		if self.selected_item is not None and self.selected_item._id is not None:
+			layer = self._get_layer (self.selected_item)
+			self.layers[layer].markers[self.selected_item._id][1][0] = True
+		self.selected = self.selected_item
 		self.map.update ()
+		List._update_map (self)
 	def _debug_update_map (self, item):
 		'Update active and visible status on map'
 		layer = self._get_layer (item)
@@ -333,16 +400,16 @@ class Locations (MarkerList):
 				kret += (i.Name,)
 				fret += ((i.Name, zonescolor, i, i.Active, i.Visible),)
 		return kret, fret
-	def _update_map (self, item):
+	def _update_map (self):
 		# Add zone boundary for selected zone.
-		if item is None or item._id is None:
+		if self.selected_item is None or self.selected_item._id is None:
 			self.layers[0].tracks = []
 		else:
-			track = [(x.latitude, x.longitude) for x in lua.as_list (item.Points)]
+			track = [(x.latitude, x.longitude) for x in lua.as_list (self.selected_item.Points)]
 			track += (track[0],)
 			self.layers[0].tracks = [track]
 		# Do all the usual stuff.
-		MarkerList._update_map (self, item)
+		MarkerList._update_map (self)
 
 class Inventory (List):
 	def __init__ (self):
@@ -412,6 +479,24 @@ class History (gtk.VBox):
 		else:
 			item = self.store.get_value (i, 1)
 			self.detail.set (*item)
+
+class Log (gtk.TreeView):
+	def __init__ (self):
+		self.store = gtk.ListStore (str, str, str, str)
+		gtk.TreeView.__init__ (self, self.store)
+		self.columns = [gtk.TreeViewColumn (x) for x in ('Time', 'Level', 'Message')]
+		self.renderer = [gtk.CellRendererText () for x in range (len (self.columns))]
+		for c in range (len (self.columns)):
+			self.append_column (self.columns[c])
+			self.columns[c].pack_start (self.renderer[c])
+			self.columns[c].add_attribute (self.renderer[c], 'text', c)
+			self.columns[c].add_attribute (self.renderer[c], 'foreground', 3)
+	def add_log (level, text):
+		t = time.strftime ('%X')
+		self.store.append ((t, level, text, logcolor))
+		self.size += 1
+		self.new = True
+		update_title (self)
 
 class Timers (gtk.TreeView):
 	def __init__ (self):
@@ -536,7 +621,8 @@ class CB:
 	def log (self, level, levelname, text):
 		self.update ()
 		if level >= minloglevel:
-			print 'Log %s: %s' % (levelname, text)
+			#print 'Log %s: %s' % (levelname, text)
+			log.add_log (level, levelname, text)
 	def show (self, screen, item):
 		# 'Detail', 'Inventory', 'Item', 'Location', 'Main', 'Tasks'
 		self.update ()
@@ -574,6 +660,9 @@ class CB:
 		taskscreen.update ()
 		if debug:
 			timers.update ()
+	def update_stats (self):
+		locationscreen.update_stats ()
+		environmentscreen.update_stats ()
 
 def next_message (widget = None, name = None):
 	global queue, current_msg, last_screen
@@ -668,19 +757,31 @@ notebook.set_can_focus (False)
 box.add1 (notebook)
 box.add2 (map)
 
-def add_screen (screen, label, color):
+def add_screen (screen, label, color, show_size = True):
 	ret = screen
-	l = gtk.Label ('<span foreground="%s">%s</span>' % (color, label))
-	l.set_use_markup (True)
-	notebook.append_page (ret, l)
+	ret.size = 0
+	ret.show_size = show_size
+	ret.color = color
+	ret.tabname = label
+	ret.title = gtk.Label ()
+	ret.new = False
+	notebook.append_page (ret, ret.title)
+	update_title (ret)
 	return ret
+
+def no_new (book, page, num):
+	page = book.get_nth_page (num)
+	page.new = False
+	update_title (page)
+notebook.connect ('switch-page', no_new)
 
 locationscreen = add_screen (Locations (zones), 'Locations', zonescolor)
 inventoryscreen = add_screen (Inventory (), 'Inventory', inventorycolor)
 environmentscreen = add_screen (Environment (objects, characters), 'Environment', environmentcolor)
 taskscreen = add_screen (Tasks (), 'Tasks', taskcolor)
 history = add_screen (History (), 'History', historycolor)
-message = add_screen (Detail (), 'Message', messagecolor)
+log = add_screen (Log (), 'Log', logcolor)
+message = add_screen (Detail (), 'Message', messagecolor, show_size = False)
 win.show_all ()
 map.grab_focus ()
 last_screen = notebook.page_num (taskscreen)
@@ -690,6 +791,7 @@ if not debug:
 	environmentscreen.hide ()
 	taskscreen.hide ()
 	history.hide ()
+	log.hide ()
 	# Only the message tab is still available.
 notebook.set_current_page (notebook.page_num (message))
 
@@ -706,6 +808,7 @@ def update ():
 	if fp is not None:
 		p = Position (fp[0], fp[1], 0, 0, 0, 0, 0)
 	if p:
+		cbs.set_status ('%s %s %d m' % (make_str (p.lat), make_str (p.lon), p.alt))
 		position.markers = [[(p.lat, p.lon), [False, True]]]
 		wherigo.Player.ObjectLocation = wherigo.ZonePoint (p.lat, p.lon, p.alt)
 		for i in gameobject.AllZObjects:
@@ -754,6 +857,7 @@ def update ():
 		position.markers[0][1][1] = False
 	if update_all:
 		cbs.update ()
+	cbs.update_stats ()
 	map.update ()
 	return True
 gtk.timeout_add (500, update)
@@ -776,11 +880,15 @@ cbs = CB ()
 gameobject = cartridge._setup (game, cbs, script)
 
 def start_game (widget = None, name = None):
+	hashpoint = wherigo.ZItem (gameobject)
+	hashpoint.Name = 'geohash'
+	hashpoint.ObjectLocation = wherigo.ZonePoint (52.978011, 6.563031, 0)
 	locationscreen.show ()
 	inventoryscreen.show ()
 	environmentscreen.show ()
 	taskscreen.show ()
 	history.show ()
+	log.show ()
 	notebook.set_current_page (last_screen)
 	message.hide ()
 	if gameobject.OnStart:

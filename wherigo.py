@@ -1,4 +1,5 @@
-# module containing wherigo stuff that will be accessed by the lua code from the cartridge.
+# Module containing wherigo stuff that will be accessed by the lua code from the cartridge.
+# All spherical math formulae were taken from http://www.movable-type.co.uk/scripts/latlong.html
 
 import sys
 import math
@@ -83,8 +84,8 @@ class ZObject (object):
 		self.Container = container
 		self.Commands = []
 		self.CommandsArray = []
-		self.CurrentBearing = 0
-		self.CurrentDistance = 0
+		self.CurrentBearing = Bearing (0)
+		self.CurrentDistance = Distance (0)
 		self.Description = '[Description for this object is not set]'
 		self.Icon = None
 		self.Id = None
