@@ -1,0 +1,35 @@
+xmarksthespot (0.4-2) unstable; urgency=low
+
+  * New release: renamed program and package.
+
+ -- Bas Wijnen <wijnen@debian.org>  Wed, 11 Jul 2012 23:12:46 +0200
+
+wherpygo (0.4-1) unstable; urgency=low
+
+  * New release: set module path for gwz2gwc.
+  * Fix zipfile handling for gwz2gwc.
+  * Reposition buttons for easier navigating with smaller screens.
+
+ -- Bas Wijnen <wijnen@debian.org>  Fri, 15 Jun 2012 23:02:21 +0200
+
+wherpygo (0.3-1) unstable; urgency=low
+
+  * New release: More robust for weird gps messages.
+  * Use new version of lua library.
+  * Add gwz2gwc, a cartridge compiler.
+
+ -- Bas Wijnen <wijnen@debian.org>  Fri, 15 Jun 2012 20:24:13 +0200
+
+wherpygo (0.2-1) unstable; urgency=low
+
+  * New release: Removed *.pyc files and auto-reconnect to gpsd.
+  * Add dependency to python-gps.
+  * Minor interface fixes.
+
+ -- Bas Wijnen <wijnen@debian.org>  Tue, 22 May 2012 10:40:45 +0200
+
+wherpygo (0.1-1) unstable; urgency=low
+
+  * Initial release. (Closes: #672410)
+
+ -- Bas Wijnen <wijnen@debian.org>  Thu, 10 May 2012 10:34:16 +0200

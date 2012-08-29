@@ -1,0 +1,22 @@
+Source: xmarksthespot
+Section: games
+Priority: optional
+Maintainer: Bas Wijnen <wijnen@debian.org>
+Build-Depends: debhelper (>= 8), python, ruby-ronn
+Standards-Version: 3.9.3
+
+Package: xmarksthespot
+Architecture: all
+Depends: ${misc:Depends}, ${python:Depends}, python-lua, python-gps
+Description: player for wherigo cartridges
+ Wherigo cartridges are files which can contain tour guides, puzzles, or other
+ adventure-style games. The adventures always make use of a gps receiver to
+ know your position, and part of the adventure is to actually walk around with
+ your legs instead of your keys. To play such a cartridge, a program is needed.
+ There are several players available for different phones and gps devices.
+ .
+ Xmarksthespot is another player. It is designed for a netbook. That is not a
+ usual platform for the game, because taking a netbook with you is not very
+ comfortable. However, the good thing about it is that the interface has more
+ features than the default interface. It also includes a debugging mode, which
+ can be used by cartridge writers, or players who are stuck.

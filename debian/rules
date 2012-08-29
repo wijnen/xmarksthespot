@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with python2
+
+override_dh_auto_build:
+	dh_auto_build
+	ronn -r xmarksthespot.6.ronn
+	ronn -r gwz2gwc.6.ronn
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -f xmarksthespot.6 gwz2gwc.6 *.pyc *.pyo

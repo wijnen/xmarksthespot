@@ -1,0 +1,37 @@
+xmarksthespot(6) -- player for wherigo cartridges
+============================================
+<!--
+xmarksthespot.6.ronn - manual page for xmarksthespot
+Copyright 2012 Bas Wijnen <wijnen@debian.org>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+## SYNOPSIS
+`xmarksthespot` [cartridge.gwc]
+
+## DESCRIPTION
+Play a wherigo cartridge. Left or right click on the map to zoom in or out.
+Drag the middle button, or scroll to pan. Press home to center current position
+in view. Ctrl-home adjusts the view to make everything fit. Ctrl-enter or
+ctrl-click temporarily overrides the gps position, to simulate that you were
+somewhere. Double click on a location or a thing in the environment to move it
+to the center of the map.
+
+## SECURITY CONSIDERATIONS
+The cartridge is written in lua, which allows execution of arbitrary code.
+Don't play cartridges from untrusted sources.
+
+## AUTHOR
+Xmarksthespot was written by `Bas Wijnen <wijnen@debian.org>`

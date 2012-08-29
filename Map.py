@@ -1,5 +1,19 @@
 # encoding=utf-8
-# Map class, for showing a map with stuff on it.
+# Map.py - Map class, for showing a map with stuff on it, used by xmarksthespot.
+# Copyright 2012 Bas Wijnen <wijnen@debian.org>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import gtk
 import math
@@ -139,7 +153,8 @@ class Map (gtk.DrawingArea):
 		fromcenter = [pixel[i] - self.size[i] / 2. for i in range (2)]
 		return [self.pos[i] + fromcenter[1 - i] / zoom[i] for i in range (2)]
 	def update (self):
-		if not self.buffer or not self.gc:
+		w = self.get_window ()
+		if not w or not self.buffer or not self.gc:
 			return True
 		# Clear buffer.
 		self.buffer.draw_rectangle (self.bggc, True, 0, 0, self.size[0], self.size[1])
@@ -148,7 +163,7 @@ class Map (gtk.DrawingArea):
 			return True
 		for layer in self.layers:
 			layer.draw ()
-		self.get_window ().draw_drawable (self.gc, self.buffer, 0, 0, 0, 0, self.size[0], self.size[1])
+		w.draw_drawable (self.gc, self.buffer, 0, 0, 0, 0, self.size[0], self.size[1])
 		return True
 	def realize (self, widget):
 		gtk.DrawingArea.realize (self)
