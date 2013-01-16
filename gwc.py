@@ -20,11 +20,7 @@ import zipfile
 import os
 import lua
 import sys
-sys.path += ['/usr/share/xmarksthespot']
 import wherigo
-import xmtsconfig
-
-config = xmtsconfig.load_config ()
 
 _CARTID = '\x02\x0aCART\x00'
 
@@ -65,14 +61,14 @@ def _wstring (s):
 	return s + '\0'
 
 class cartridge:
-	def init (self, file, script, cbs):
+	def __init__ (self, file, script, cbs, config):
 		if type (file) is not str:
 			file = file.read ()
 		if not file.startswith (_CARTID):
 			if os.path.isdir (file):
 				# This is a gwz directory.
 				gwc = False
-				data = self._read_gwz (file, True)
+				data = self._read_gwz (file, True, config)
 			else:
 				file = open (file).read ()
 				if file.startswith (_CARTID):
@@ -82,12 +78,21 @@ class cartridge:
 				else:
 					# This should be a gwz file.
 					gwc = False
-					data = self._read_gwz (file, False)
+					data = self._read_gwz (file, False, config)
 		else:
 			self._read_gwc (file)
-		wherigo._script.run ('', 'Env', xmtsconfig.get_env (config, self, os.path.splitext (file)[0]), name = 'setting Env')
+		env = {}
+		for i in config:
+			if i.startswith ('env-'):
+				env[i[4:]] = config[i]
+		env['Downloaded'] = int (env['Downloaded'])
+		if not env['CartFilename']:
+			env['CartFilename'] = os.path.splitext (file)[0]
+		if not env['Device']:
+			env['Device'] = self.device
+		wherigo._script.run ('', 'Env', env, name = 'setting Env')
 		if not gwc:
-			self._read_gwz_2 (cbs, data)
+			self._read_gwz_2 (cbs, data, config)
 		else:
 			cartridge = wherigo.ZCartridge ()
 			cartridge._setup (self, cbs)
@@ -136,7 +141,7 @@ class cartridge:
 			filetype = _int (file, pos)	# Not used.
 			size = _int (file, pos)
 			self.data[rid[i]] = file[pos[0]:pos[0] + size]
-	def _read_gwz (self, gwz, isdir):
+	def _read_gwz (self, gwz, isdir, config):
 		# Read gwz file or directory. gwz is path to data. Media files are given their id from the lua source.
 		data = {}
 		code = None	# This is the name of the lua code file.
@@ -162,7 +167,7 @@ class cartridge:
 		for key in ('gametype', 'author', 'description', 'guid', 'name', 'latitude', 'longitude', 'altitude', 'startdesc', 'url', 'device', 'version', 'user', 'completion_code'):
 			setattr (self, key, config[key])
 		return data
-	def _read_gwz_2 (self, cbs, data):
+	def _read_gwz_2 (self, cbs, data, config):
 		cartridge = wherigo.ZCartridge ()
 		media = cartridge._getmedia (self, self.data[0], cbs)
 		self.data += [None] * len (media)
@@ -217,7 +222,6 @@ def write_cartridge (target, info, lua, files):
 		iconid = 0
 	if type (target) is str:
 		target = open (target, 'wb')
-
 	header = ''
 	header += _wdouble (info.latitude)
 	header += _wdouble (info.longitude)
@@ -238,7 +242,6 @@ def write_cartridge (target, info, lua, files):
 	header += _wstring (info.device)
 	header += '\0' * 4
 	header += _wstring (info.completion_code)
-
 	data = [_wint (len (lua)) + lua]
 	for f in files:
 		# TODO: Filetype is now always 0; it isn't used by my player, but can be used by other players.
@@ -246,17 +249,13 @@ def write_cartridge (target, info, lua, files):
 			data += ('\0',)
 		else:
 			data += ('\1' + _wint (0) + _wint (len (f)) + f,)
-
 	target.write (_CARTID)
 	target.write (_wshort (len (data)))
 	offset = len (_CARTID) + 2 + 6 * len (data) + 4 + len (header)
-
 	for i in range (len (data)):
 		target.write (_wshort (i))
 		target.write (_wint (offset))
 		offset += len (data[i])
-
 	target.write (_wint (len (header)) + header)
-
 	for i in data:
 		target.write (i)

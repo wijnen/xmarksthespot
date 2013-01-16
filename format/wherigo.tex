@@ -1,0 +1,506 @@
+\documentclass{article}
+\usepackage{listings}
+\begin{document}
+
+\section{Introduction}
+This document aims to define all technical things about Wherigo. It is a work
+in progress. If you have any suggestions for changes or additions, please send
+them to me at wijnen@debian.org.
+
+This document only specifies what the Cartridge writer can see. A Player
+Program MAY do extra processing and give extra feedback to the Player, but it
+MUST NOT do this in a way that can be detected by the Cartridge. Any
+requirements and prohibitions in this document are meant in this context.
+
+
+\section{Definitions}
+Throughout this document, the following definitions are used:
+
+\begin{enumerate}
+	\item Player: the person playing the Wherigo game.
+	\item Player Program: the program used to play the game. This program does not contain information about the game itself; it needs a Cartridge to be used.
+	\item Editor: the program used to create a Cartridge. This is usually a program designed for creating Wherigo cartridges, but can also be a simple text editor.
+	\item Cartridge: a game definition, which is processed by a Player Program to present a game to the Player.
+	\item Game Object: The ZCartridge object which is returned by the lua code from the Cartridge.
+	\item Event: a function in the lua code which is called by the Player Program in response to an event, such as the Player pressing a button. If the function is not defined, triggering the Event is not an error.
+	\item Web Site: a central place to download Cartridges and mark them as completed.
+	\item MAY: an option.
+	\item MUST: a requirement.
+	\item MUST NOT: a prohibition.
+	\item SHOULD: a requirement in most cases, but there may be circumstances in which it is better to follow a different course.
+	\item SHOULD NOT: a prohibition in most cases, but there may be circumstances in which it is better to follow a different course.
+\end{enumerate}
+
+\section{Cartridge startup}
+When playing a Wherigo game, the Player starts the Player Program and loads a
+Cartridge. The Player Program MUST then perform the following actions, in this
+order:
+
+\begin{enumerate}
+\item Create a clean lua environment.
+\item Add the ``Wherigo'' module, described below, to the environment.
+\item Create Wherigo.Player, described below. Wherigo.Player.Cartridge is set to nil.
+\item Run the lua code from \verb-_cartridge.lua-. This returns the Game Object.
+\item Wait for a GPS fix and set Player.ObjectLocation to its coordinates.
+\item Trigget the OnStart Event.
+\end{enumerate}
+
+\section{ZMedia}
+There is consensus that the original method of handling ZMedia to file mapping
+must be changed. Here I first describe this original way, followed by a
+proposal for a new method.
+
+There are several media files, and there is metadata about them.
+
+Originally, the metadata was put in the lua code. After running the lua code,
+and before triggering OnStart, all the media had to be referenced by creating
+Wherigo.ZMedia objects. These objects contained a Name, Description, AltText
+(for use when the media is unavailable) and Resources. The Resources member is
+itself a table, containing one or more tables. Each table specifies a Type and
+a Filename, and a possibly empty table of Directives. When a Cartridge was
+compiled, the lua code must be run. The media files are inserted into the GWC
+file in the order they are created. The compiler had to choose (based on
+capabilities of the target platform of the Player Program) zero or one of the
+files to actually insert into the file, to be used by the Player Program.
+
+The main problem with this approach is that it requires the lua code to be run
+at compile time. Therefore, an alternate approach is welcome. What follows is a
+proposal for such an alternative.
+
+The proposal describes a new way to define media for a Cartridge. It describes
+only the way to do this in source. At the moment, it is expected that this
+source is changed into the old format during compilation. However, when a new
+Cartridge format is required, because new incompatible features are desired, it
+is recommended to change the media handling in there as well.
+
+The source is a directory with the short name of the cartridge. This directory
+does not contain subdirectories, but only the used media files and exactly one
+lua file. A ZIP-archive of this directory is its GWZ file.
+
+\noindent\textbf{--- Proposal starts here ---}
+
+First of all, I propose a stricter handling of the file names. There are two
+unique files, one which contains the lua code and one which contains the
+metadata. The lua code must be in a file called \verb-_cartridge.lua-, the
+metadata in \verb-_cartridge.gwi-.
+
+The cartridge and media metadata in the gwi-file is given in RFC822-like form;
+the same that is used in e-mail headers. Every field consists of one line which
+matches the regular expression:
+
+\begin{center}\verb-'^(\w+):\s*([^;]*?)(?:;\s*(\w+)\s*(?:=\s*([^;]+))?\s*)*$'-\end{center}
+
+The subexpressions are named:
+\begin{enumerate}
+	\item Key
+	\item Value
+	\item Attribute
+	\item Attribute Value
+\end{enumerate}
+
+For clarity, an example cartridge follows below.
+
+This first line is sometimes followed by one or more indented lines. These
+lines together, including the newlines, but excluding the indentation, are
+called the Long Value. Lines in the Long Value which contain a dot as the first
+character after indentation MUST remove this dot from the Long Value, but keep
+the indentation after it, if any. Thus, to include an empty line in a Long
+Value, write a line containing only an indented dot.
+
+Empty lines and lines containing only white space are ignored. Such lines MUST
+NOT occur just before or within a Long Value.
+
+Now follows a list of keys, with their details. Every key MUST occur exactly
+once, unless otherwise specified. Only Attributes which are defined here may be
+used. Values for fields which do not allow Attributes may contain any
+characters, including semicolons (this exception is not shown in the regular
+expression above).
+
+\newcommand\defkey[5]{\par\noindent\begin{tabular}{|l|l|}\hline Key&#1\\Value&\parbox{.75\textwidth}{#2}\\Long Value&\parbox{.75\textwidth}{#3}\\Attributes&\parbox{.75\textwidth}{#4}\\Comments&\parbox{.75\textwidth}{#5}\\\hline\end{tabular}\par}
+\defkey{Name}{The cartridge's long name. The filename, which is the short name, SHOULD be an abbreviation of this long name.}{The cartridge's description.}{-}{}
+\defkey{Version}{The cartridge's version.}{-}{-}{}
+\defkey{Author}{The cartridge's author.}{-}{-}{}
+\defkey{E-mail}{The e-mail address for sending feedback.}{-}{-}{}
+\defkey{Copyright}{The copyright claims for this cartridge.}{Continuation of the copyright claims, if required.}{-}{}
+\defkey{License}{The name of the license under which this cartridge is distributed.}{Full license text, or a link to it, for the cartridge source. Note that this information is not included in the compiled Cartridge, so it MUST be extracted from the source and passed on to the location where the compiled Cartridge can be retrieved.}{-}{}
+\defkey{Company}{The name of the company or other organization that the author works for.}{-}{-}{This key is optional.}
+\defkey{Activity}{MUST be one of a defined set of values. Currently allowed values are TourGuide, Puzzle, Fiction, and Geocache. Would be good to allow adding more values somehow.}{-}{-}{}
+\defkey{StartingLocation}{Three floating point numbers, setting the starting location of the Cartridge. The first two numbers define the latitude and longitude, both in degrees. The third number defines the altitude, in meters.}{Description of the starting location.}{-}{}
+\defkey{BuilderVersion}{Name and version of the builder software used, in human-readable format.}{-}{-}{This key is optional.}
+\defkey{Media}{Name of the title image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
+\defkey{Icon}{Name of the icon image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
+\defkey{CreateDate}{Date that the cartridge was originally created.}{-}{-}{}
+\defkey{UpdateDate}{Date that the cartridge was last updated.}{-}{-}{}
+\defkey{Image}{Name of the image.}{Description of the image.}{AltText = text to use when the image cannot be displayed.}{See discussion about media below.}
+\defkey{Sound}{Name of the audio.}{Description of the audio.}{-}{See discussion about media below.}
+\defkey{File}{Filename of a media.}{-}{Directives for this file; format to be determined.}{See discussion about media below.}
+\defkey{URL}{URL where a media file can be retrieved.}{-}{Directives for this file; format to be determined.}{See discussion about media below.}
+
+\vskip\baselineskip
+
+This gwi-file REPLACES the current system where the images and sounds must be
+defined by lua code. This means that these media are no longer assigned to
+variables. To reach them from the lua code, they must be defined. This proposal
+makes them part of the Game Object. It will have a member named Image and one
+named Sound. Each of those is a table, where the keys are
+the names of the media, and the values are the ZMedia objects that would
+originally have been created by the lua code.
+
+The definition of media files (Image, or Sound) in the gwi-file is done
+by first defining their name, using the key of the appropriate type.
+Immediately after this, zero or more File or URL fields must be defined to
+specify options which provide this media object. File and URL fields MUST NOT
+be used in any other place.
+
+Media objects or files which do not need to specify anything, do not need to be
+defined in the gwi-file. A media file which is in the Cartridge and which is
+not defined in the gwi-file MUST be treated the same as a media file for which
+an Image, or Sound field (depending on the file format) is defined as the
+filename of the file, minus the extension, with a corresponding File with the
+filename as a value. If there are several files which would define the same
+media object, they MUST be treated as files all providing the same object. (But
+if one is they are different types, one Sound and one Image, they MUST be
+providing separate objects.)
+
+If a media object is defined, but no sources, then any files of a fitting type
+with the object's name as their basename are used as candidates to provide it.
+
+If a media object is defined and no sources are present, it MUST be treated the
+same way as if there are sources, but none of them can be used.
+
+\subsection{Example cartridge}
+\subsubsection{Lua file}
+\noindent\begin{lstlisting}
+require "Wherigo"
+
+cartridge = Wherigo.ZCartridge ()
+
+function cartridge:OnStart ()
+	Wherigo.PlayAudio (cartridge.Sound.bell)
+	Wherigo.Dialog {{Text = "Look at me!",
+		Media = cartridge.Image.dude},}
+end
+
+return cartridge
+\end{lstlisting}
+\subsubsection{gwi file}
+\noindent\begin{lstlisting}
+Name: Example Cartridge
+	This is an example cartridge header,
+	showing how it is built up.
+	This description can be multiple lines.
+Version: 1.0
+Author: Bas Wijnen
+E-mail: <wijnen@debian.org>
+Copyright: Copyright 2013 Bas Wijnen
+License: AGPL-3+
+	You may copy, modify and redistribute
+	this cartridge under the terms of the
+	GNU Affero General Public License,
+	version 3 or later (at your option).
+	See http://www.gnu.org/licenses/agpl-3.0.html
+	for details.
+Activity: TourGuide
+StartingLocation: 53.0 6.0 0
+	Go there and see farmland!
+\end{lstlisting}
+
+In the file, bell.wav and dude.jpg are also packaged. They do not need to be
+mentioned in the gwi-file.
+
+\noindent\textbf{--- Proposal ends here ---}
+
+
+\section{The Lua operating environment.}
+
+The Cartridge code runs in a clean lua environment. Everything that is specific
+to Wherigo is in the Wherigo module. Below is a description of all its
+contents. Implementations MAY include more members inside the Wherigo module
+for internal use. Anything that is not defined in this document MUST NOT be
+used by Cartridge writers. This includes creating new objects. Player Programs
+MUST NOT use any variable outside of the Wherigo module for internal use.
+
+Many functions can be called with a table as a single argument, where the keys
+of the table are argument names. Functions which support this are tagged
+(table-callable).
+
+\newcommand\codedef[2]{\par\noindent\begin{tabular}{|l|l|}\hline\parbox{.4\textwidth}{#1}&\parbox{.5\textwidth}{#2}\\\hline\end{tabular}\par}
+\newcommand\funcdef[4]{
+	\par\vskip.5\baselineskip
+	\par\noindent\textbf{Function:} #1 $\rightarrow$ #2\par
+	\noindent\textbf{Arguments:} \parbox{.8\textwidth}{#3}\par
+	\noindent\textbf{Description:} \parbox{.8\textwidth}{#4}\par
+	\vskip.5\baselineskip
+}
+\newcommand\attrdef[3]{
+	\par\vskip.5\baselineskip
+	\par\noindent\textbf{Attribute:} #1 (#2)\par
+	\noindent\textbf{Description:} \parbox{.8\textwidth}{#3}\par
+	\vskip.5\baselineskip
+}
+\subsection{Constants}
+\codedef{INVALID\_ZONEPOINT}{An object, used instead of a ZonePoint, to indicate a ``no coordinate''-value.}
+\codedef{DETAILSCREEN\\INVENTORYSCREEN\\ITEMSCREEN\\LOCATIONSCREEN\\MAINSCREEN\\TASKSCREEN}{These constants are used with ShowScreen to focus the Player's attention to a certain part of the Player Program's interface.}
+\codedef{LOGDEBUG\\LOGCARTRIDGE\\LOGINFO\\LOGWARNING\\LOGERROR}{These constants are used with LogMessage, to set the type of message to log.}
+
+\subsection{Player object}
+The Player object is a ZCharacter which is tied to the player. Its position is
+automatically set to the device's GPS coordinates, and when the player moves,
+certain events may be triggered: OnEnter, OnLeave, OnProximity, OnDistant. The
+Player object is also handled specially by some functions. This is described in
+each function where this is the case.
+
+Player.Name is set to the Player name, as defined by the Cartridge metadata.
+Player.CompletionCode is set to a special code, which can be used to mark the
+Cartridge as ``Completed'' on the Web Site.
+
+Player.ObjectLocation is set to \verb-INVALID_ZONEPOINT- during Cartridge
+initialization. Any code which depends on the Player location MUST NOT be in
+the initialization part. Once OnStart is triggered, the coordinates will be
+valid.
+
+\subsection{Classes}
+All classes start with a capital letter. In these descriptions, member
+functions are shown with a hypothetical object with the class name, but in all
+lowercase letters. Argument values in square brackets are optional. Their
+default values are given in the explanation.
+
+All ZObject constructors need a ZCartridge as their first argument, which is
+not explained every time. This must be the Game Object. Alternatively, because
+all ZObject constructors are table-callable, the cartridge may be passed
+through a table.
+
+Classes which have a class name in parentheses after their own name are a
+subclass of this class. They have all its methods and attributes. Documentation
+for these are not repeated.
+
+\subsubsection{Bearing}
+Direction from one point to another, in degrees. 0 means north, 90 means east.
+\funcdef{Bearing (value)}{Bearing}{value: value in degrees.}{Constructor.}
+
+\subsubsection{Distance}
+Distance between two points.
+Supported units are 'feet' or 'ft', 'miles' or 'mi', 'meters' or 'm', 'kilometers' or 'km', 'nauticalmiles'.
+\funcdef{Distance (value, [units])}{Distance}{value: distance; default units are meters.}{Constructor.}
+\funcdef{distance:GetValue ([units])}{number}{units: requested units. defaults to meters.}{Return the value in the requested units.}
+\funcdef{distance ([units])}{number}{units: requested units. defaults to meters.}{Return the value in the requested units.}
+
+\subsubsection{ZObject}
+Base class for all objects. This should never be constructed directly, but only
+as part of a subclass.
+\funcdef{ZObject.made (object)}{boolean}{object: the object to be tested}{Tests whether an object is made by (is an instance of) this class. Note that this is normally called on subclasses. It will only return true if the tested object is of the calling class, or of a subclass of it. This is a class-method, it does not take a self object as first argument, and must not be called with `:'.}
+\funcdef{zobject:Contains (object)}{boolean}{object: ZObject which is tested for being inside this one.}{Return true if zobject is the Container of object, or if zobject:Contains (object.Container). As a special case, if zobject is a Zone and object is Player, return IsPointInZone (Player.ObjectLocation, zobject)}
+\funcdef{zobject:MoveTo (container)}{nil}{container: new owner of zobject, or nil}{Remove zobject from its current container, and optionally into a new one. All Container and Inventory properties are changed accordingly.}
+\attrdef{InsideOfZones}{Table of Zones}{List of Zones that this ZObject is inside of.}
+\attrdef{Active}{Boolean}{Non-active objects are ignored for all events, and are not shown in any UI elements.}
+\attrdef{Container}{ZObject}{ZObject that contains this object. Normally a Zone, ZCharacter or ZItem.}
+\attrdef{Commands}{Table of ZCommand}{Commands which may be available with this ZObject. Only used for ZItem and ZCharacter.}
+\attrdef{CurrentBearing}{Bearing}{Direction from the Player to this object. 0 if the Player contains this object.}
+\attrdef{CurrentDistance}{Distance}{Distance from the Player to this object. 0 if the Player contains this object.}
+\attrdef{Description}{String}{Description of this ZObject. For objects which can appear in the UI, this is shown as their details.}
+\attrdef{Icon}{ZMedia}{Image which represents this ZObject. This can be used as an icon when the object is shown in a list.}
+\attrdef{Media}{ZMedia}{Image which represents this ZObject. This can be used when a larger image is required, usually for the object's details.}
+\attrdef{Inventory}{Table of ZObject}{A list of all objects which have this ZObject set as their Container.}
+\attrdef{Name}{String}{Name of this object. Used when presenting this object in the UI.}
+\attrdef{ObjectLocation}{ZonePoint}{Current location of this ZObject.}
+\attrdef{Visible}{Boolean}{This ZObject is not shown in the UI unless this is set. It does respond normally to events though (unless inactive).}
+\attrdef{Cartridge}{ZCartridge}{The Game Object.}
+\attrdef{On\textit{CommandName}}{Function}{This event callback is available for ZCharacter and ZItem objects, once for each ZCommand that is available for it. \textit{CommandName} is the name of the command. It is triggered by selecting the command. See ZCommand for details.}
+
+\subsubsection{ZCartridge (ZObject)}
+The class for the Game Object. There is always exactly one of these. It is
+initialized with the metadata from the Cartridge, and holds some tables which
+can be used to reach objects in the game.
+\funcdef{ZCartridge ()}{ZCartridge}{-}{Constructor.}
+\funcdef{zcartridge:RequestSync ()}{nil}{}{Save the current state of the Game. More information on saving is below.}
+\attrdef{AllZObjects}{Table of ZObject}{List of all ZObjects in this Cartridge.}
+\attrdef{ZVariables}{Table of strings or numbers}{All variables which need to be saved must be in this table. The keys are variable names; the values are their values. This table is not kept synchronized during game play. This happens just before the game is saved.}
+\attrdef{OnStart}{Function}{Event, called when the game is started.}
+\attrdef{OnEnd}{Function}{Event, called when the game ends.}
+\attrdef{OnSync}{Function}{Event, called just before saving a game.}
+\attrdef{OnRestore}{Function}{Event, called when loading a saved game.}
+\attrdef{Version}{String}{Version from the metadata.}
+\attrdef{Author}{String}{Version from the metadata.}
+\attrdef{Copyright}{String}{Version from the metadata.}
+\attrdef{License}{String}{License from the metadata. Only the short part; the Long Value is not included.}
+\attrdef{Company}{String}{Company from the metadata.}
+\attrdef{Activity}{String}{Activity from the metadata.}
+\attrdef{StartingLocation}{ZonePoint}{StartingLocation from the metadata.}
+\attrdef{StartingLocationDescription}{String}{StartingLocationDescription from the metadata.}
+\attrdef{BuilderVersion}{String}{BuilderVersion from the metadata.}
+\attrdef{CreateDate}{String}{CreateDate from the metadata.}
+\attrdef{UpdateDate}{String}{UpdateDate from the metadata.}
+\attrdef{Icon}{ZMedia}{Icon from the metadata.}
+\attrdef{Media}{ZMedia}{Media from the metadata.}
+\attrdef{TargetDevice}{ZMedia}{TargetDevice from the metadata.}
+\attrdef{TargetDeviceVersion}{String}{TargetDeviceVersion from the metadata.}
+\attrdef{PublishDate}{String}{PublishDate from the metadata.}
+\attrdef{LastPlayedDate}{String}{LastPlayedDate from the metadata.}
+
+\subsubsection{ZCharacter (ZObject)}
+An entity in the game, which is supposed to be living. For example, it can
+usually be talked to.
+\funcdef{ZCharacter (Cartridge, [Container])}{ZCharacter}{Container: initial value for Container. Default is nil.}{(table-callable) Constructor.}
+\attrdef{PositionAccuracy}{Distance}{Only valid for Player. Accuracy of the GPS signal.}
+
+\subsubsection{ZItem (ZObject)}
+An entity in the game, which is supposed to be lifeless. These can often be picked up, for example.
+\funcdef{ZItem (Cartridge, [Container])}{ZItem}{Container: initial value for Container. Default is nil.}{(table-callable) Constructor.}
+
+\subsubsection{ZonePoint}
+Position on the globe.
+\funcdef{ZonePoint (latitude, longitude, altitude)}{ZonePoint}{Coordinates.}{(table-callable) Constructor.}
+
+\subsubsection{Zone (ZObject)}
+A region on the globe. The region is defined by its perimiter and a point
+inside it. Every closed curve divides a sphere into two parts. One part is
+inside and the other is outside. Normally, the inside part is a small region
+and the outside part is most of the sphere, but that isn't a requirement. The
+point inside the region defines which of the parts is inside and which is not.
+\funcdef{Zone (Cartridge, [OriginalPoint], [ShowObjects], [State],
+[Inside])}{Zone}{OriginalPoint: initial OriginalPoint\\ShowObjects: initial
+value for ShowObjects\\State: String; initial state.\\Inside: Boolean; initial
+inside state.}{(table-callable) Constructor.}
+\attrdef{OriginalPoint}{ZonePoint}{The point which is supposed to be the origin
+of the Zone; it MUST NOT be on the perimiter. It is by definition inside the
+Zone.}
+\attrdef{ShowObjects}{String}{One of \textit{OnEnter}, \textit{OnProximity}, or \textit{Always}.
+Defines when ZObjects which are inside the Zone are visible. When the Player is
+inside the Zone, they are always visible. When you are in the proximity range,
+they are only visible if this is set to OnEnter or OnProximity. Otherwise they
+are only visible if this is set to Always.}
+\attrdef{State}{String}{State of the Player with respect to this Zone. One of
+	\textit{Inside}, \textit{Proximity}, \textit{Distant}, \textit{NotInRange}. The Player is inside the zone
+when Player.ObjectLocation is within the perimiter. Otherwise, if the distance
+to the perimiter is smaller than ProximityRange, the State is Proximity. If it
+is larger than ProximityRange, but smaller than DistanceRange, the State is
+Distant. Otherwise it is NotInRange.}
+\attrdef{OnEnter}{Function}{Event, triggered when the Player enters the Zone.}
+\attrdef{OnExit}{Function}{Event, triggered when the Player leaves the Zone.}
+\attrdef{OnProximity}{Function}{Event, triggered when the Player enters the \textit{Proximity} ring of a Zone. Note that this can be entered from Inside and from Distant.}
+\attrdef{OnDistant}{Function}{Event, triggered when the Player enters the \textit{Distant} ring of a Zone. Note that this can be entered from Proximity and from NotInRange.}
+
+\subsubsection{ZTask (ZObject)}
+A task that the player can, and often should, do.
+\funcdef{ZTask (Cartridge)}{ZTask}{}{(table-callable) Constructor.}
+\attrdef{Complete}{Boolean}{If true, the ZTask is considered completed. The UI may show this to the Player.}
+
+\subsubsection{ZTimer (ZObject)}
+A timer which can be used to schedule one-time or periodic (interval)
+callbacks. For interval timers, the Player Program SHOULD call the OnTick
+function at constant intervals. However, there is no guarantee that this is
+always possible.
+\funcdef{ZTimer (Cartridge)}{ZTimer}{}{(table-callable) Constructor.}
+\funcdef{ztimer:Start ()}{nil}{}{Starts the timer. If it was already running, do nothing. If ztimer.Remaining is negative, set it to ztimer.Duration.}
+\funcdef{ztimer:Stop ()}{nil}{}{Stops the timer. If it was not running, do nothing.}
+\funcdef{ztimer:Tick ()}{nil}{}{This function is called when the timer expires. It can be called from the lua code to fake an expired timer event. Countdown timers are stopped when this is called. Interval timers are restarted.}
+\attrdef{Type}{String}{Must be \textit{Countdown} or \textit{Interval}. Defines whether ztimer stops or restarts when it expires.}
+\attrdef{Duration}{Number}{Time in seconds. This is used when ztimer is started with a negative Remaining value. In particular, it is used as the restart value for Interval ZTimers.}
+\attrdef{OnStart}{Function}{Event which is triggered when Start is called. It is not triggered when an Interval ZTimer restarts.}
+\attrdef{OnStop}{Function}{Event which is triggered when Stop is called. It is not triggered when a ZTimer expires.}
+\attrdef{OnTick}{Function}{Event which is triggered when the timer expires. For Interval timers, this is called after restarting the timer, calling Stop from this event will work as expected.}
+
+\subsubsection{ZInput (ZObject)}
+Helper object to request input from the Player. There are three types of input:
+button, multiple choice and text. A button input will present a message to the
+Player and wait for a button to be pressed. A multiple choice input is similar,
+but there can be multiple buttons to choose from. A text input requests a line
+of text from the Player.
+
+When requesting the input, the Player Program is normally using the image in
+zinput.Media as an illustration, if there is one.
+\funcdef{ZInput (Cartridge)}{ZInput}{}{(table-callable) Constructor.}
+\attrdef{OnGetInput}{Function}{Event which is triggered when a multiple choice or text input is answered. It is passed a string argument: the text on the button that was pressed for a multiple choice input; the entered text for a text input.}
+\attrdef{Text}{String}{Text which is displayed to request the input.}
+
+\subsubsection{ZCommand (ZObject)}
+Helper class for commands on ZItems and ZCharacters. When these are displayed, it may be possible to run commands with them. There are two ways that this is possible: with a different object, or on its own.
+
+There are several options, each of which may have a different visualization. Player Programs can choose how to do this visualization. The list below only gives examples.
+
+\begin{enumerate}
+	\item Command works on its own. A single button is displayed.
+	\item Command works with objects, but no candidates are available. A line of text explaining this is displayed.
+	\item Command works with objects, and one or more objects are available. A group of buttons is displayed for each object.
+\end{enumerate}
+
+When a command button is clicked by the Player, a callback on the ZObject containing the command is triggered.
+
+\funcdef{ZCommand (Cartridge, [Text], [EmptyTargetListText], [Enabled], [CmdWith], [WorksWithAll], [WorksWithList])}{ZCommand}{Initial attribute values}{(table-callable) Constructor.}
+\attrdef{Text}{String}{The text that is shown to identify the command. For example, \textit{Talk}. This must be a short text.}
+\attrdef{EmptyTargetListText}{String}{The text that is displayed for commands which need an object, but none is available.}
+\attrdef{Enabled}{Boolean}{If set the false, the command cannot be run. Normally, it will not be shown to the Player at all.}
+\attrdef{CmdWith}{Boolean}{If true, the command needs an object to work on.}
+\attrdef{WorksWithAll}{Boolean}{Only used if CmdWith is true. If this is true, every Visible object, except the object that this command is for, will automatically be in the list of available targets.}
+\attrdef{WorksWithList}{Table of ZObjects}{Only used if CmdWith is true and WorksWithAll is false. This is a list of candidate objects for using the command with. It can only be used with them if they are Visible.}
+
+\subsubsection{ZMedia (ZObject)}
+Class for objects which reference external data: a sound or an image.
+
+The metadata describes which files or URLs are used to get the external media,
+including the compiler directions for selecting and modifying it for use on the
+target device. All ZMedia objects are created as part of the ZCartridge
+construction. Lua code MUST NOT create ZMedia objects itself.
+
+ZMedia are used from lua code, by linking them to messages (for images) or
+using them with PlayAudio (for sounds). They are opaque objects; they have no
+public methods or attributes.
+
+\subsection{Functions}
+\subsubsection{User interface}
+These functions may not be called during cartridge initialization.
+
+There is always at most one graphical function waiting for Player input. If a
+second one is called before the previous one was answered, it will replace it.
+The previous message's callback function will be called with a nil argument to
+signify that this happened.
+
+\funcdef{Dialog (table)}{nil}{table: a list of messages.}{Show a list of messages to the player, in sequence. The elements of the table are the same as for the MessageBox function, except that they cannot have a Callback or Buttons (the Player Program would normally give them an implicit Ok button to show the next message).}
+\funcdef{MessageBox (table)}{nil}{table: the message to display.}{The table, like a ZCommand, contains a Text to display, and an optional Media containing an image. In addition, it contains Buttons, which is a table of strings, which are printed on buttons, and a Callback function, which is called when a button is pressed. Callback is passed a string 'Button1' if the first button is pressed, 'Button2' for the second, etc.}
+\funcdef{GetInput (zinput)}{nil}{The ZInput to request.}{Request a previously defined input from the Player.}
+\funcdef{PlayAudio (sound)}{nil}{The ZMedia to play.}{Play sound (which must be a sound media file). Any previously playing file MAY be stopped.}
+\funcdef{ShowStatusText (text)}{nil}{message string}{Let the Player know about something in a non-invasive way. Normally, this happens by showing the text in the status bar of the Player Program.}
+\funcdef{Command SaveClose ()}{nil}{}{Save the game and quit the Player Program.}
+\funcdef{Command DriveTo (zonepoint)}{nil}{target ZonePoint}{Leave the Player Program interface temporarily, and let the device navigate the Player to zonepoint.}
+\funcdef{Command StopSound ()}{nil}{}{Abort all currently playing sounds.}
+\funcdef{Command Alert ()}{nil}{}{Give a signal to the Player, such as a beep or a flash.}
+\funcdef{ShowScreen (which, [item])}{nil}{which: One of the SCREEN-constants.\\item: a ZObject}{Try to focus the Player's attention on the given part of the interface. If which is DETAILSCREEN, item MUST be used to specify of which object the details should be shown. For other values of which, item MUST be ignored and should be omitted.}
+\funcdef{LogMessage (message)}{nil}{Message to log}{Write a message to a log file. The Player Program MAY display this file to the Player as well. The log format is described below.}
+
+\subsubsection{Spherical arithmetics}
+These functions SHOULD use spherical arithmetics to perform their task. At the very least, they MUST work properly for zones crossing any coordinate boundary.
+\funcdef{IsPointInZone (point, zone)}{Boolean}{point: The ZonePoint to test.\\zone: The Zone te test.}{Return true if point and zone.OriginalPoint are in the same segment of the sphere.}
+\funcdef{VectorToSegment (point, s1, s2)}{Distance, Bearing}{point: the ZonePoint to test.\\s1, s2: the ZonePoint endpoints of the segment to test. The segment is the shortest line over the sphere from s1 to s2. s1 and s2 MUST NOT be exactly opposite each other.}{Determine the closest point on the segment from point; return the vector from point to this point.}
+\funcdef{VectorToZone (point, zone)}{Distance, Bearing}{point: the ZonePoint to test.\\zone: the Zone to test.}{Return the minimum of the results of VectorToSegment for each of the segments of the perimiter of the Zone.}
+\funcdef{VertorToPoint (point1, point2)}{Distance, Bearing}{point1, point2: ZonePoints}{Return the vector from point1 to point2.}
+\funcdef{TranslatePoint (point, distance, bearing)}{ZonePoint}{point: point to translate.\\distance, bearing: vector to translate over.}{Return the ZonePoint where you end up when moving from point over vector.}
+
+\subsubsection{Other}
+\funcdef{NoCaseEquals (s1, s2)}{Boolean}{s1, s2: strings to compare.}{Return the case-insensitive comparison of s1 and s2.}
+
+\section{File types}
+\subsection{Zipped source: gwz}
+A zip archive containing a single directory, which must have the same name as
+the gwz file itself, minus its extension. This directory contains all required
+sounds and images, the gwi metadata file, \verb-_cartridge.gwi-, and
+\verb-_cartridge.lua-.
+
+\subsection{Compiled Cartridge: gwc}
+Format defined at \verb-http://code.google.com/p/wherugo/wiki/GWC-. Additions will be required for supporting the new metadata proposal.
+
+\subsection{Log: gwl}
+One line per message. Each line contains a timestamp, GPS information, and a string as passed to LogMessage. It has fields separated by `|'. The fields are:
+\begin{enumerate}
+	\item Timestame; 14 digits without separators: Year (4), month (2), day (2), hour (2), minutes (2), seconds (2).
+	\item Latitude, in degrees. Positive means east.
+	\item Longitude, in degrees. Positive means north.
+	\item Altitude in meters.
+	\item GPS precision in meters.
+	\item Message, which can be any string not containing a newline. Note that it can contain `|', which MUST NOT be treated as a field separator.
+\end{enumerate}
+
+\subsection{Metadata: gwi}
+RFC822-like format, described above. If the proposal gets accepted, the file format description will be moved here.
+\subsection{Saved game: ?}
+The format for this file still has to be decided.
+\end{document}

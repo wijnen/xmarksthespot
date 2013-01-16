@@ -2,3 +2,6 @@ lua.py
 args.py
 *.pyc
 *.gwc
+format/*.aux
+format/*.log
+format/*.pdf

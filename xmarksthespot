@@ -17,7 +17,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
-sys.path += ['/usr/share/xmarksthespot']
 import lua
 import re
 import gps
@@ -33,6 +32,7 @@ try:
 except:
 	pass
 import argparse
+sys.path += ['/usr/share/xmarksthespot']
 import xmtsconfig
 
 config = xmtsconfig.load_config ()
@@ -106,7 +106,7 @@ class GpsPoller:
 				if value['mode'] == 1 or 'lat' not in value or 'lon' not in value:
 					self.current_value = Position ()
 				else:
-					self.current_value = Position (value['lat'], value['lon'], value['alt'] if 'alt' in value else 0, value['speed'] if 'speed' in value else 0, value['climb'] if 'climb' in value else 0, value['track'] if 'track' in value else 0, value['time'] if 'time' in value else 0)
+					self.current_value = Position (*[value[x] if x in value else 0 for x in ('lat', 'lon', 'alt', 'speed', 'climb', 'track', 'time')])
 		except:
 			#print 'gps exception:', sys.exc_value
 			self.current_value = Position ()
@@ -132,6 +132,7 @@ def update_title (screen):
 	if screen.new:
 		t = '<b>' + t + '</b>'
 	screen.title.set_markup (t)
+	screen.show ()
 
 def make_str (degs):
 	'Make a string value from a float degree value'
@@ -147,7 +148,8 @@ def make_str (degs):
 class Detail (gtk.VBox):
 	def __init__ (self):
 		gtk.VBox.__init__ (self)
-		self.buttons = gtk.HBox ()
+		self.buttons = gtk.VBox ()
+		self.current_buttons = []
 		self.pack_start (self.buttons, False)
 		self.text = gtk.TextView ()
 		self.text.set_can_focus (False)
@@ -184,14 +186,23 @@ class Detail (gtk.VBox):
 			sys.stderr.write ('Warning: assuming text to be iso8859-15, because it is not valid utf-8:%s\n' % text)
 			text = unicode (text, 'iso8859-15')
 		self.text.get_buffer ().set_text (text)
-		self.remove (self.buttons)
-		self.buttons = gtk.VBox ()
-		self.pack_start (self.buttons, False)
-		for b in buttons:
+		for idx, b in enumerate (buttons):
+			if len (self.current_buttons) > idx and self.current_buttons[idx] == b:
+				continue
+			if b in self.current_buttons[idx + 1:]:
+				pos = self.current_buttons.index (b)
+				self.buttons.reorder_child (self.buttons.get_children ()[pos], idx)
+				self.current_buttons = self.current_buttons[:idx] + [b] + self.current_buttons[idx:pos] + self.current_buttons[pos + 1:]
+				continue
+			def add_button (target):
+				self.buttons.pack_start (target, True)
+				self.buttons.reorder_child (self.buttons.get_children ()[-1], idx)
+				self.current_buttons = self.current_buttons[:idx] + [b] + self.current_buttons[idx:]
+				target.show ()
 			if len (b) == 1:
 				# This is a text entry.
 				entry = gtk.Entry ()
-				self.buttons.pack_start (entry, True)
+				add_button (entry)
 				if cb is not None:
 					entry.connect ('activate', cb, b[0])
 					entry.grab_focus ()
@@ -201,17 +212,18 @@ class Detail (gtk.VBox):
 				if cb is not None:
 					button.connect ('clicked', cb, b[1])
 				button.set_can_focus (True)
-				self.buttons.pack_start (button, True)
+				add_button (button)
 			elif len (b) == 2:
 				# This is a Works-with command without a target.
 				box = gtk.HBox ()
-				self.buttons.pack_start (box, True)
+				add_button (box)
 				box.pack_start (gtk.Label (b[0][0]), False)
 				box.pack_start (gtk.Label (b[0][1]), True)
+				box.show_all ()
 			else:
 				# This is a Works-with command with targets.
 				box = gtk.HBox ()
-				self.buttons.pack_start (box, True)
+				add_button (box)
 				if b[0] is not None:
 					box.pack_start (gtk.Label (b[0]), False)
 				for t in b[2]:
@@ -220,7 +232,10 @@ class Detail (gtk.VBox):
 					if cb is not None:
 						button.connect ('clicked', cb, b[1], t[1])
 					box.pack_start (button, True)
-		self.buttons.show_all ()
+				box.show_all ()
+		while len (buttons) < len (self.current_buttons):
+			self.current_buttons.pop ()
+			self.buttons.remove (self.buttons.children ()[-1])
 
 class List (gtk.ScrolledWindow):
 	def __init__ (self, title, with_icon = False):
@@ -289,7 +304,7 @@ class List (gtk.ScrolledWindow):
 			for c in self.selected_item.Commands:
 				cmd = self.selected_item.Commands[c]
 				if not cmd.Enabled:
-					print '%s: Command %s not enabled' % (self.selected_item.Name, cmd.Text)
+					#print '%s: Command %s not enabled' % (self.selected_item.Name, cmd.Text)
 					continue
 				t = cmd.Text
 				if cmd.CmdWith:
@@ -408,12 +423,12 @@ class MarkerList (List):
 		i = self.store.get_iter (path)
 		obj = self.store.get_value (i, 2)
 		# TODO: trigger OnClicked?
-		pos = self._get_pos (obj)
+		pos = obj._get_pos ()
 		self.map.set_pos ((pos.latitude, pos.longitude))
 	def _add (self, data):
 		self.store.append (data)
 		summary, color, info, active, visible = data
-		pos = self._get_pos (info)
+		pos = info._get_pos ()
 		if pos:
 			layer = self._get_layer (info)
 			info._id = len (self.layers[layer].markers)
@@ -421,16 +436,6 @@ class MarkerList (List):
 			self.map.update ()
 		else:
 			info._id = None
-	def _get_pos (self, info):
-		if isinstance (info, wherigo.Zone):
-			return info.OriginalPoint
-		if not hasattr (info, 'ObjectLocation') or not info.ObjectLocation:
-			if hasattr (info, 'Container') and info.Container:
-				return self._get_pos (info.Container)
-			else:
-				print ('Warning: object %s (type %s) has no location' % (info.Name, type (info)))
-				return None
-		return info.ObjectLocation
 	def update_stats (self):
 		if self.selected_item:
 			if self.selected_item.CurrentDistance.GetValue ('meters') < 1000:
@@ -439,9 +444,10 @@ class MarkerList (List):
 				diststr = '%.2f km' % self.selected_item.CurrentDistance.GetValue ('kilometers')
 			self.distance.set_text (diststr)
 			self.bearing.set_text ('%d°' % self.selected_item.CurrentBearing.value)
-			self.lat.set_text (make_str (self._get_pos (self.selected_item).latitude))
-			self.lon.set_text (make_str (self._get_pos (self.selected_item).longitude))
-			self.alt.set_text ('%d m' % self._get_pos (self.selected_item).altitude)
+			pos = self.selected_item._get_pos ()
+			self.lat.set_text (make_str (pos.latitude))
+			self.lon.set_text (make_str (pos.longitude))
+			self.alt.set_text ('%d m' % pos.altitude)
 		else:
 			self.distance.set_text ('-')
 			self.bearing.set_text ('-')
@@ -615,8 +621,6 @@ class Timers (gtk.TreeView):
 			if signature[c] is not bool:
 				self.columns[c].add_attribute (self.renderer[c], 'foreground', 5)
 		self.set_reorderable (True)
-	def add_timer (self, name):
-		self.store.append ((name, 'Countdown', False, '', ''))
 	def mktime (self, t):
 		return '%5.2f' % t
 	def update (self):
@@ -652,6 +656,18 @@ class Timers (gtk.TreeView):
 			self.store.set_value (current, 3, int (i.Remaining))
 			self.store.set_value (current, 4, '%6.3f' % i.Duration)
 			current = self.store.iter_next (current)
+	def skip (self, widget):
+		'''Skip ahead until next timeout'''
+		global skipped_time
+		if not gameobject:
+			return
+		times = [t.Remaining for t in gameobject.AllZObjects.list () if isinstance (t, wherigo.ZTimer) and t._target]
+		if len (times) == 0:
+			return
+		shortest_time = min (times)
+		skipped_time += shortest_time
+		update ()	# This is the global update function; it will set the game object's time to the new value.
+		gameobject._reschedule_timers ()
 
 class CB:
 	pipeline = None
@@ -721,11 +737,8 @@ class CB:
 		statusbar.pop (statuscontext)
 		statusbar.push (statuscontext, text)
 	def save (self):
-		if gameobject.OnSync:
-			print 'OnSync'
-			gameobject.OnSync ()
 		self.update ()
-		save_cb (None, 1)
+		save_cartridge (None) # TODO: filename?
 	def quit (self):
 		self.update ()
 		print ('request to quit')
@@ -792,6 +805,13 @@ class CB:
 	def update_map (self):
 		locationscreen.update_map ()
 		environmentscreen.update_map ()
+	def add_timer (self, time, cb):
+		if time > 0:
+			return gobject.timeout_add (int (time * 1000), cb)
+		else:
+			return gobject.idle_add (cb)
+	def remove_timer (self, handle):
+		gobject.source_remove (handle)
 
 def next_message (widget = None, name = None, item = None):
 	global queue, current_msg, last_screen
@@ -807,7 +827,7 @@ def next_message (widget = None, name = None, item = None):
 		if isinstance (m, wherigo.ZInput):
 			# No arguments.
 			assert name is None
-			if hasattr (m, 'OnGetInput'):
+			if m.OnGetInput:
 				if m.InputType == 'MultipleChoice':
 					assert item is not None
 					print 'OnGetInput multiple choice %s' % m.Name
@@ -822,7 +842,6 @@ def next_message (widget = None, name = None, item = None):
 					raise AssertionError ('unknown input type')
 			else:
 				print 'no callback for input'
-
 		else:
 			# Argument is passed to button callback.
 			if 'Callback' in m:
@@ -844,7 +863,7 @@ def next_message (widget = None, name = None, item = None):
 			media = current_msg.Media
 		else:
 			media = None
-		text = current_msg.Text if hasattr (current_msg, 'Text') else ''
+		text = current_msg.Text
 		if current_msg.InputType == 'MultipleChoice':
 			buttons = [(None, None, [(x, x) for x in current_msg.Choices.list ()])]
 		elif current_msg.InputType == 'Text':
@@ -902,8 +921,7 @@ def open_cb (widget, response):
 
 def save_cb (widget, response):
 	if response != 0:
-		# TODO: not implemented yet.
-		pass
+		save_cartridge (widget.get_filename ())
 	savedialog.hide ()
 	return True
 
@@ -926,11 +944,12 @@ def open_cartridge (cartfile):
 		cbs.update ()
 
 	file_new (None)
-	wherigo._script = lua.lua ()
-	wherigo._script.module ('Wherigo', wherigo)
-	cartridge = gwc.cartridge ()
-	cartridge.init (cartfile, wherigo._script, cbs)
-	gameobject = wherigo.ZCartridge ()
+	gameobject = wherigo._load (cartfile, cbs, config)
+	for i in gameobject._image:
+		px = gtk.gdk.PixbufLoader ()
+		px.write (gameobject._image[i])
+		px.close ()
+		gameobject._image[i] = px.get_pixbuf ()
 	settings.show_start = True
 	text = 'You are about to play "%s":<br><br>' % gameobject.Name +  gameobject.Description + '<br><br>Please go to the starting point and press ok.<br>The starting point for this cartridge is defined as follows:<br><br>' +  gameobject.StartingLocationDescription
 	buttons = [('Ok', 'Ok')]
@@ -940,6 +959,13 @@ def open_cartridge (cartfile):
 	notebook.set_current_page (notebook.page_num (message))
 	cbs.update ()
 
+def save_cartridge (cartfile):
+	if gameobject.OnSync:
+		print 'OnSync'
+		gameobject.OnSync ()
+	# TODO.
+
+skipped_time = 0
 queue = []
 current_msg = None
 map = Map.Map (0, 0)
@@ -1008,11 +1034,18 @@ box = gtk.HPaned ()
 if debug:
 	tpaned = gtk.VPaned ()
 	timers = Timers ()
-	tpaned.add1 (timers)
+	bx = gtk.VBox ()
+	skipbutton = gtk.Button ('Skip until next timeout')
+	skipbutton.connect ('clicked', timers.skip)
+	bx.pack_start (skipbutton)
+	bx.pack_start (timers)
+	tpaned.add1 (bx)
 	tpaned.add2 (box)
 	vbox.pack_start (tpaned)
 else:
 	vbox.pack_start (box)
+inside_label = gtk.Label ()
+vbox.pack_start (inside_label, False)
 statusbar = gtk.Statusbar ()
 vbox.pack_start (statusbar, False)
 statuscontext = statusbar.get_context_id ('status')
@@ -1044,7 +1077,6 @@ def add_screen (screen, label, color, show_size = True):
 	ret.title = gtk.Label ()
 	ret.new = False
 	notebook.append_page (ret, ret.title)
-	update_title (ret)
 	return ret
 
 def no_new (book, page, num):
@@ -1071,105 +1103,34 @@ else:
 
 device = GpsPoller ()
 def update ():
-	# Update Timers. Do this before everything else, so Remaining is set correctly when callbacks are invoked.
-	now = time.time ()
-	if gameobject:
-		for i in gameobject.AllZObjects.list ():
-			if isinstance (i, wherigo.ZTimer) and i._target != None:
-				i.Remaining = i._target - now
 	fp = map.get_force_position ()
-	update_all = debug
 	if fp is not None:
 		p = Position (fp[0], fp[1], wherigo.Player.ObjectLocation.altitude if wherigo.Player.ObjectLocation else 0, 0, 0, 0, 0)
 	else:
 		p = device.get_pos ()
+	if gameobject:
+		update_all = gameobject._update (p, skipped_time + time.time ())
+		inside = gameobject._inside_list ()
+	else:
+		inside = []
 	if p:
 		lat_label.set_text (make_str (p.lat))
 		lon_label.set_text (make_str (p.lon))
 		alt_label.set_text ('%d m' % p.alt)
 		position.markers[0] = [(p.lat, p.lon), [False, True]]
-		if not gameobject:
-			return True
-		wherigo.Player.ObjectLocation = wherigo.ZonePoint (p.lat, p.lon, p.alt)
-		for i in gameobject.AllZObjects.list ():
-			# Update all object distances and bearings.
-			if (isinstance (i, wherigo.ZItem) and i.Container is not wherigo.Player) or isinstance (i, wherigo.ZCharacter):
-				if not i.Active or not i.ObjectLocation:
-					continue
-				i.CurrentDistance, i.CurrentBearing = wherigo.VectorToPoint (wherigo.Player.ObjectLocation, i.ObjectLocation)
-			# Update container info, and call OnEnter or OnExit.
-			elif isinstance (i, wherigo.Zone):
-				if i._active != i.Active:
-					# TODO: Doing this here means that OnSetActive fires after the lua callback has returned. Setting a zone active and immediately inactive doesn't make it fire, while it should make it fire twice.
-					i._active = i.Active
-					if hasattr (i, 'OnSetActive'):
-						print 'OnSetActive %s' % i.Name
-						i.OnSetActive (i)
-						update_all = True
-				if not i.Active:
-					continue
-				inside = wherigo.IsPointInZone (wherigo.Player.ObjectLocation, i)
-				if inside != i._inside:
-					update_all = True
-					i._inside = inside
-					if inside:
-						if i._state == 'NotInRange' and hasattr (i, 'OnDistant') and i.OnDistant:
-							print 'OnDistant 1 %s' % i.Name
-							i.OnDistant (i)
-						if i._state != 'Proximity' and hasattr (i, 'OnProximity') and i.OnProximity:
-							print 'OnProximity %s' % i.Name
-							i.OnProximity (i)
-						if hasattr (i, 'OnEnter') and i.OnEnter:
-							print 'OnEnter %s' % i.Name
-							i.OnEnter (i)
-					else:
-						print 'no longer inside %s' % i.Name
-						if hasattr (i, 'OnExit') and i.OnExit:
-							print 'OnExit %s' % i.Name
-							i.OnExit (i)
-				if inside:
-					i.State = 'Inside'
-					i._state = i.State
-				else:
-					# See how close we are.
-					i.CurrentDistance, i.CurrentBearing = wherigo.VectorToZone (wherigo.Player.ObjectLocation, i)
-					if i.CurrentDistance < i.ProximityRange:
-						if i._state == 'NotInRange' and hasattr (i, 'OnDistant') and i.OnDistant:
-							print 'OnDistant 2 %s (from %s)' % (i.Name, i.State)
-							i.OnDistant (i)
-							update_all = True
-						i.State = 'Proximity'
-					elif i.DistanceRange < wherigo.Distance (0) or i.CurrentDistance < i.DistanceRange:
-						if i._state == 'Inside' and hasattr (i, 'OnProximity') and i.OnProximity:
-							print 'OnProximity %s' % i.Name
-							i.OnProximity (i)
-							update_all = True
-						i.State = 'Distant'
-					else:
-						if i._state == 'Inside' and hasattr (i, 'OnProximity') and i.OnProximity:
-							print 'OnProximity %s' % i.Name
-							i.OnProximity (i)
-							update_all = True
-						if i._state in ('Inside', 'Proximity') and hasattr (i, 'OnDistant') and i.OnDistant:
-							print 'OnDistant 3 %s (from %s)' % (i.Name, i.State)
-							i.OnDistant (i)
-							update_all = True
-						i.State = 'NotInRange'
-					if i.State != i._state:
-						print 'new state for %s: %s' % (i.Name, i.State)
-						s = i._state
-						i._state = i.State
-						attr = 'On' + i.State
-						if hasattr (i, attr) and getattr (i, attr):
-							print '%s %s (from %s)' % (attr, i.Name, s)
-							getattr (i, attr) (i)
-							update_all = True
 	else:
 		position.markers[0][1][1] = False
-	if update_all:
+	if update_all or debug:
 		cbs.update ()
 	cbs.update_stats ()
 	map.update ()
+	if len (inside) == 0:
+		instr = 'You are not in a zone'
+	elif len (inside) == 1:
+		instr = "You are in the zone '%s'" % inside[0].Name
+	else:
+		instr = 'You are in the zones ' + ', '.join (["'%s'" % i.Name for i in inside[:-1]]) + " and '" + inside[-1].Name + "'"
+	inside_label.set_text (instr)
 	return True
 gtk.timeout_add (500, update)
 

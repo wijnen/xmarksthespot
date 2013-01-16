@@ -31,22 +31,11 @@ def load_config ():
 # Configuration for xmarksthespot.
 # Empty lines and lines starting with # are ignored.
 # The first words is the configuration option key. The rest of the line is the value.
-gametype		Puzzle
-author			Anonymous
-description		No description set
-guid			0
-name			
-latitude		0
-longitude		0
-altitude		0
-startdesc		No description set
-url			about:blank
-device			PocketPC
-version			0
-user			Monty Python
-completion_code		completion-code
-icon			
-splash			
+Id			0
+URL			about:blank
+Device			PocketPC
+PlayerName		Monty Python
+CompletionCode		completion-code
 
 # Env settings.
 env-Platform		xmarksthespot
@@ -86,19 +75,7 @@ timercolor		#f0f
 		if len (l) == 0 or l[0].startswith ('#'):
 			continue
 		ret[l[0]] = l[1] if len (l) > 1 else None
-		override = os.getenv ('XMTT_' + l[0].upper ())
+		override = os.getenv ('XMTT_' + l[0].upper ().replace ('-', '_'))
 		if override is not None:
 			ret[l[1]] = override if override != '' else None
-	return ret
-
-def get_env (config, game, cartfile):
-	ret = {}
-	for i in config:
-		if i.startswith ('env-'):
-			ret[i[4:]] = config[i]
-	ret['Downloaded'] = int (ret['Downloaded'])
-	if not ret['CartFilename']:
-		ret['CartFilename'] = cartfile
-	if not ret['Device']:
-		ret['Device'] = game.device
 	return ret

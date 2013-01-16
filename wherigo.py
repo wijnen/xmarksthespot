@@ -16,12 +16,12 @@
 
 # All spherical math formulae were taken from http://www.movable-type.co.uk/scripts/latlong.html
 
-import sys
 import math
-import time
-import gtk
-import gobject
 import lua
+import struct
+import zipfile
+import os
+import sys
 
 INVALID_ZONEPOINT = False	# Constant representing a coordinate which does not exist, used to indicate that a variable should not hold a real value.
 
@@ -44,14 +44,192 @@ _log_names = ('DEBUG', 'CARTRIDGE', 'INFO', 'WARNING', 'ERROR')
 Player = None
 # All functions should be able to call lua functions.
 _script = None
+# All functions should be able to call callbacks. It would be nicer if those would be per-cartridge, but they aren't called with the cartridge as argument.
+_cb = None
 
 def _table_arg (f):
-	'''decorator for functions allowing a table as a single argument.'''
+	'''Decorator for functions allowing a table as a single argument.'''
 	def ret (self, *a, **ka):
 		if len (ka) > 0 or len (a) > 1 or not isinstance (a[0], lua.Table):
 			return f (self, *a, **ka)
 		return f (self, **a[0].dict ())
 	return ret
+
+def _load (file, cbs, config):
+	'''Load a cartridge gwc or gwz file or directory for playing; return the ZCartridge object.'''
+	# This function used to be a separate module. This is why it looks so messy. These subfunctions are not put at global level, to avoid namespace pollution.
+	global _cb
+	global _script
+	_cb = cbs
+	_CARTID = '\x02\x0aCART\x00'
+	def _short (file, pos):
+		ret = struct.unpack ('<h', file[pos[0]:pos[0] + 2])[0]
+		pos[0] += 2
+		return ret
+	def _int (file, pos):
+		ret = struct.unpack ('<i', file[pos[0]:pos[0] + 4])[0]
+		pos[0] += 4
+		return ret
+	def _double (file, pos):
+		ret = struct.unpack ('<d', file[pos[0]:pos[0] + 8])[0]
+		pos[0] += 8
+		return ret
+	def _string (file, pos):
+		ret = ''
+		p = file.find ('\0', pos[0])
+		assert p >= 0
+		ret = file[pos[0]:p]
+		pos[0] = p + 1
+		return ret
+	def _wshort (num):
+		return struct.pack ('<h', num)
+	def _wint (num):
+		return struct.pack ('<i', num)
+	def _wdouble (num):
+		return struct.pack ('<d', num)
+	def _wstring (s):
+		assert '\0' not in s
+		return s + '\0'
+	def _read_gwc (data, file):
+		pos = [len (_CARTID)]	# make this an array so it can be changed by functions.
+		num = _short (file, pos)
+		offset = [None] * num
+		rid = [None] * num
+		#data['filetype'] = [None] * num
+		data['data'] = [None] * num
+		for i in range (num):
+			rid[i] = _short (file, pos)
+			assert rid[i] < num
+			offset[i] = _int (file, pos)
+		size = _int (file, pos)
+		data['Latitude'] = _double (file, pos)
+		data['Longitude'] = _double (file, pos)
+		data['Altitude'] = _double (file, pos)
+		pos[0] += 4 + 4
+		data['MediaId'] = _short (file, pos)
+		data['IconId'] = _short (file, pos)
+		data['Activity'] = _string (file, pos)
+		data['PlayerName'] = _string (file, pos)
+		pos[0] += 4 + 4
+		data['Name'] = _string (file, pos)
+		data['Id'] = _string (file, pos)
+		data['Description'] = _string (file, pos)
+		data['StartingLocationDescription'] = _string (file, pos)
+		data['Version'] = _string (file, pos)
+		data['Author'] = _string (file, pos)
+		data['URL'] = _string (file, pos)	# unused.
+		data['TargetDevice'] = _string (file, pos)
+		pos[0] += 4
+		data['CompletionCode'] = _string (file, pos)
+		assert pos[0] == len (_CARTID) + 2 + num * 6 + 4 + size
+		# read lua bytecode.
+		pos[0] = offset[0]
+		size = _int (file, pos)
+		data['data'][0] = file[pos[0]:pos[0] + size]
+		# read all other files.
+		for i in range (1, num):
+			pos[0] = offset[i]
+			if file[pos[0]] == '\0':
+				continue
+			pos[0] += 1
+			filetype = _int (file, pos)	# Not used.
+			size = _int (file, pos)
+			data['data'][rid[i]] = (filetype > 0x10, file[pos[0]:pos[0] + size])
+	def _read_gwz (data, gwz, isdir, config):
+		# Read gwz file or directory. gwz is path to data. Media files are given their id from the lua source.
+		d = {}
+		code = None	# This is the name of the lua code file.
+		if isdir:
+			names = os.listdir (gwz)
+		else:
+			z = zipfile.ZipFile (gwz, 'r')
+			names = z.namelist ()
+		for n in names:
+			ln = n.lower ()
+			assert ln not in d
+			if isdir:
+				d[ln] = open (os.path.join (gwz, n), 'rb').read ()
+			else:
+				d[ln] = z.read (n)
+			if os.path.splitext (ln)[1] == os.extsep + 'lua':
+				assert code is None
+				code = ln
+		# There must be lua code.
+		assert code is not None
+		data['data'] = [d.pop (code)]
+		# Set up extra properties. These should later come from a metadata file.
+		for key in ('Name', 'Version', 'Description', 'Author', 'Copyright', 'Company', 'Activity', 'StartingLocationDescription', 'BuilderVersion', 'Media', 'Icon', 'CreateDate', 'UpdateDate'):
+			data[key] = ''
+		for key in ('Latitude', 'Longitude', 'Altitude'):
+			data[key] = 0.0
+		# Set up compile-time settings.
+		for key in ('URL', 'TargetDevice', 'TargetDeviceVersion', 'PlayerName', 'CompletionCode', 'Id', 'PublishDate'):
+			data[key] = config[key]
+		# Set up boot-time settings.
+		for key in ('LastPlayedDate'):
+			data[key] = config[key]
+		return d
+	def _read_gwz_2 (data, d, config):
+		cartridge = ZCartridge._setup (data)
+		media = cartridge._getmedia ()
+		data['data'] += [None] * len (media)
+		map = {}
+		for m in range (len (media)):
+			assert media[m]._id == m + 1
+			r = media[m].Resources.list ()
+			if len (r) < 1:
+				continue
+			r = r[0]	# TODO: choose best, not first; don't warn about rest.
+			t = r['Type']
+			n = r['Filename']
+			map[n.lower ()] = m + 1
+			data['data'][m + 1] = (t in ('wav', 'mp3', 'fdl', 'ogg', 'flac', 'au'), d.pop (n.lower ()))
+		if cartridge.Icon
+		if len (d) != 0:
+			print 'ignoring unused media: %s.' % (', '.join (d.keys ()))
+		cartridge._setup_media (data)
+		return cartridge
+	# Prepare the lua parser.
+	_script = lua.lua ()
+	_script.module ('Wherigo', sys.modules[__name__])
+	data = {}
+	if type (file) is not str:
+		file = file.read ()
+	if not file.startswith (_CARTID):
+		filename = file
+		if os.path.isdir (file):
+			# This is a gwz directory.
+			gwc = False
+			d = _read_gwz (data, file, True, config)
+		else:
+			filedata = open (file).read ()
+			if filedata.startswith (_CARTID):
+				# This is a gwc file.
+				gwc  = True
+				_read_gwc (data, filedata)
+			else:
+				# This should be a gwz file.
+				gwc = False
+				d = _read_gwz (data, file, False, config)
+	else:
+		filename = 'undefined'
+		_read_gwc (data, file)
+	env = {}
+	for i in config:
+		if i.startswith ('env-'):
+			env[i[4:]] = config[i]
+	env['Downloaded'] = int (env['Downloaded'])
+	if not env['CartFilename']:
+		env['CartFilename'] = os.path.splitext (filename)[0]
+	if not env['Device']:
+		env['Device'] = data['TargetDevice']
+	_script.run ('', 'Env', env, name = 'setting Env')
+	if not gwc:
+		cartridge = _read_gwz_2 (data, d, config)
+	else:
+		cartridge = ZCartridge._setup (data)
+		cartridge._setup_media (data)
+	return cartridge
 
 # Class definitions. All these classes are used by lua code and can be inspected and changed by both lua and python code.
 class Bearing:
@@ -100,13 +278,14 @@ class Distance:
 
 class ZCommand (object):
 	'A command usable on a character, item, zone, etc. Included in ZCharacter.Commands table.'
-	def __init__ (self, arg):
-		self.Text = arg['Text'] if 'Text' in arg else 'None set'
-		self.EmptyTargetListText = arg['EmptyTargetListText'] if 'EmptyTargetListText' in arg else 'None set'
-		self.Enabled = arg['Enabled'] if 'Enabled' in arg else True
-		self.CmdWith = arg['CmdWith'] if 'CmdWith' in arg else False
-		self.WorksWithAll = arg['WorksWithAll'] if 'WorksWithAll' in arg else False
-		self.WorksWithList = arg['WorksWithList'] if 'WorksWithList' in arg else _script.run ('return {}')[0]
+	@_table_arg
+	def __init__ (self, Cartridge, Text = '', EmptyTargetListText = '', Enabled = True, CmdWith = False, WorksWithAll = False, WorksWithList = None):
+		self.Text = Text
+		self.EmptyTargetListText = EmptyTargetListText
+		self.Enabled = Enabled
+		self.CmdWith = CmdWith
+		self.WorksWithAll = WorksWithAll
+		self.WorksWithList = WorksWithList if WorksWithList is not None  else _script.make_table ()
 	def x__getattribute__ (self, key):
 		k = 'Get' + key
 		obj = super (ZCommand, self)
@@ -121,24 +300,32 @@ class ZObject (object):
 	@_table_arg
 	def __init__ (self, Cartridge, Container = None):
 		self.Active = True
-		self.Container = Container
-		self.Commands = _script.run ('return {}')[0]
-		self.CommandsArray = _script.run ('return {}')[0]
+		self.Container = None
+		self.Commands = _script.make_table ()
+		#self.CommandsArray = _script.make_table ()
 		self.CurrentBearing = Bearing (0)
 		self.CurrentDistance = Distance (0)
 		self.Description = '[Description for this object is not set]'
 		self.Icon = None
-		self.Id = None
-		self.Inventory = _script.run ('return {}')[0]
-		self.Locked = False
+		#self.Id = None
+		self.Inventory = _script.make_table ()
+		#self.Locked = False
 		self.Media = None
 		self.Name = '[Name for this object is not set]'
 		self.ObjectLocation = INVALID_ZONEPOINT
 		self.Visible = True
 		self.Cartridge = Cartridge
+		if Cartridge is None:
+			# This is a special case for the creation of Player. At that point, the ZCartridge is not yet instantiated.
+			# Check that this happens during initialization.
+			assert hasattr (ZCartridge, '_settings')
+			self.ObjIndex = -1
+			return
 		if self.Cartridge._store:
 			self.ObjIndex = len (self.Cartridge.AllZObjects) + 1
 			self.Cartridge.AllZObjects += (self,)
+		if Container:
+			self.MoveTo (Container)
 	def Contains (self, obj):
 		if obj == Player:
 			return IsPointInZone (Player.ObjectLocation, self)
@@ -150,10 +337,18 @@ class ZObject (object):
 				return False
 			p = p.Container
 	def MoveTo (self, owner):
+		if self.Container:
+			l = self.Container.Inventory.list ()
+			if self in l:
+				self.Container.Inventory.pop (l.index (self))
 		self.Container = owner
+		if self.Container:
+			self.Container.Inventory += (self,)
 	def _is_visible (self, debug):
 		if not (debug or (self.Active and self.Visible)):
 			return False
+		if isinstance (self, Zone):
+			return True
 		if self.Container == None:
 			return False
 		if self.Container == Player:
@@ -201,7 +396,7 @@ class ZObject (object):
 			if hasattr (self, 'Container') and self.Container:
 				return self.Container._get_pos ()
 			else:
-				print ('Warning: object %s (type %s) has no location' % (self.Name, type (self)))
+				#print ('Warning: object %s (type %s) has no location' % (self.Name, type (self)))
 				return None
 		return self.ObjectLocation
 
@@ -216,160 +411,193 @@ class ZonePoint (object):
 	def __setattr__ (self, key, value):
 		object.__setattr__ (self, key, value)
 		if key in ('latitude', 'longitude'):
-			ZCartridge ()._cb.update_map ()
+			_cb.update_map ()
 	def __repr__ (self):
 		return 'ZonePoint (%f, %f, %f)' % (self.latitude, self.longitude, self.altitude)
 
-class ZReciprocalCommand (ZObject):
-	'Unsure.'
-	@_table_arg
-	def __init__ (self, *a):
-		print a, self, sys._getframe().f_code.co_name
-		pass
+# This class exists according to the documentation, but I've not seen any use of it by an actual cartridge.
+#class ZReciprocalCommand (ZObject):
+#	'Unsure.'
+#	def __init__ (self, *a):
+#		pass
 
 # All the following classes implement the ZObject interface.
 class ZCartridge (ZObject):
-	_instance = None
-	def __new__ (cls, *a, **aa):
-		if cls._instance is None:
-			cls._instance = super (ZCartridge, cls).__new__ (cls, *a, **aa)
-			cls._instance.AllZObjects = _script.run ('return {}')[0] # This must be done before ZObject.__init__, because that registers this object.
-			cls._instance._store = True
-			ZObject.__init__ (cls._instance, cls._instance)
-			cls._instance._mediacount = -1
-			cls._instance.Activity = 'Undefined'
-			cls._instance.Author = 'Undefined'
-			cls._instance.BuilderVersion = None
-			cls._instance.Company = None
-			cls._instance.Complete = False
-			cls._instance.CountryId = 0
-			cls._instance.CreateDate = None
-			cls._instance.Description = 'Undefined'
-			cls._instance.Icon = ZMedia (cls._instance)
-			cls._instance.Icon.Id = None
-			cls._instance.Id = 'Undefined'
-			cls._instance.LastPlayedDate = None
-			cls._instance.Media = ZMedia (cls._instance)
-			cls._instance.Media.Id = None
-			cls._instance.MsgBoxCBFuncs = _script.run ('return {}')[0]
-			cls._instance.Name = 'Undefined'
-			cls._instance.PublishDate = None
-			cls._instance.StartingLocation = INVALID_ZONEPOINT
-			cls._instance.StartingLocationDescription = 'Undefined'
-			cls._instance.StateId = '1'
-			cls._instance.TargetDevice = 'Undefined'
-			cls._instance.TargetDeviceVersion = None
-			cls._instance.UpdateDate = None
-			cls._instance.UseLogging = False
-			cls._instance.Version = 'Undefined'
-			cls._instance.Visible = True
-			cls._instance.ZVariables = _script.run ('return {}')[0]
-			cls._instance.OnEnd = None
-			cls._instance.OnRestore = None
-			cls._instance.OnStart = None
-			cls._instance.OnSync = None
-		return cls._instance
 	def __init__ (self):
-		pass
+		self.AllZObjects = _script.make_table () # This must be done before ZObject.__init__, because that registers this object.
+		self._store = True
+		ZObject.__init__ (self, self)
+		self.ZVariables = _script.make_table ()
+		self.OnEnd = None
+		self.OnRestore = None
+		self.OnStart = None
+		self.OnSync = None
+		# Settings from the metadata.
+		self.Name = ZCartridge._settings['Name']
+		self.Description = ZCartridge._settings['Description']
+		self.Version = ZCartridge._settings['Version']
+		self.Author = ZCartridge._settings['Author']
+		self.Copyright = ZCartridge._settings['Copyright']	# This wasn't there originally.
+		self.License = ZCartridge._settings['License']	# This wasn't there originally.
+		self.Company = ZCartridge._settings['Company']
+		self.Activity = ZCartridge._settings['Activity']
+		self.StartingLocation = ZonePoint (ZCartridge._settings['Latitude'], ZCartridge._settings['Longitude'], ZCartridge._settings['Altitude'])
+		self.StartingLocationDescription = ZCartridge._settings['StartingLocationDescription']
+		self.BuilderVersion = ZCartridge._settings['BuilderVersion']
+		self.CreateDate = ZCartridge._settings['CreateDate']
+		self.UpdateDate = ZCartridge._settings['UpdateDate']
+		self.Sound = _script.make_table ()
+		self.Image = _script.make_table ()
+		# With metadata, this is the point where images and sounds are created. Then also Icon and Media can be set.
+		# Now they are ignored. They are not normally used by the cartridge anyway.
+		self.Icon = None
+		self.Media = None
+		# Compile-time settings.
+		self.TargetDevice = ZCartridge._settings['TargetDevice']
+		self.TargetDeviceVersion = ZCartridge._settings['TargetDeviceVersion']
+		self.Id = ZCartridge._settings['Id']
+		self.PublishDate = ZCartridge._settings['PublishDate']
+		# Boot-time settings.
+		self.LastPlayedDate = ZCartridge._settings['LastPlayedDate']
+		# ?
+		self.UseLogging = False	# ?
+		self.CountryId = 0	# ?
+		self.StateId = '1'	# ?
+		self.Complete = False	# ?
+		del ZCartridge._settings
+		self._mediacount = 1
 	def RequestSync (self):
-		self._cb.save ()
+		_cb.save ()
 	@classmethod
 	def _new (cls):
 		'Clean up all objects and data.'
 		global Player, _script
-		cls._instance = None
 		Player = None
 		_script = None
-	def _common_setup (self, cart, code):
+	@classmethod
+	def _setup (cls, cart):
 		global Player
-		self.Activity = cart.gametype
-		self.Author = cart.author
-		self.Description = cart.description
-		self.Id = cart.guid
-		self.Name = cart.name
-		self.StartingLocation = ZonePoint (cart.latitude, cart.longitude, cart.altitude)
-		self.StartingLocationDescription = cart.startdesc
-		self.TargetDevice = cart.device
-		self.Version = cart.version
-		self._mediacount = 1
-		# According to the wiki, both the global "Player" and "wherigo.Player" should be a reference to the current player.
-		self._store = False
-		Player = ZCharacter (self)
-		self._store = True
-		# Player should not be in the list, and it should have a negative index.
-		Player.ObjIndex = -1
-		Player.Name = cart.user
-		Player.CompletionCode = cart.completion_code
-		# For technical reasons, the python value wherigo.Player is not available in lua without the statement below.
-		_script.run ('Wherigo.Player = Player', 'Player', Player, name = 'setting Player variables')
-		_script.run (code, name = 'cartridge setup')[0]
-	def _setup (self, cart, cbs):
-		self.Icon.Id = cart.iconId
-		self.Media.Id = cart.splashId
-		self._image = {}
-		self._sound = {}
-		if cbs is not None:
-			self._cb = cbs
-			self._common_setup (cart, cart.data[0])
+		cls._settings = cart
+		Player = ZCharacter (None)
+		Player.Name = cart['PlayerName']
+		Player.CompletionCode = cart['CompletionCode']
+		# For technical reasons, the python value wherigo.Player is not available in lua without the statement below. See python-lua manual page for details.
+		_script.run ('Wherigo.Player = Player', 'Player', Player, name = 'setting Player variable')
+		ret = _script.run (cart['data'][0], name = 'cartridge setup')[0]
+		Player.Cartridge = self
 		# Create a starting marker object, which can be used for drawing a marker on the map, but which is invisible for the cartridge.
 		global _starting_marker
-		self._store = False
-		_starting_marker = ZItem (self)
-		self._store = True
-		_starting_marker.ObjectLocation = self.StartingLocation
+		_starting_marker = ZItem (ret)
+		_starting_marker.ObjectLocation = ret.StartingLocation
 		_starting_marker.Name = 'The start of this cartridge'
-		_starting_marker.Media = self.Icon
-		_starting_marker.Description = self.StartingLocationDescription
-		# Set up media.
+		_starting_marker.Media = ret.Icon
+		_starting_marker.Description = ret.StartingLocationDescription
+		return ret
+	def _setup_media (self, cart):
+		self._image = {}
+		self._sound = {}
 		for i in self.AllZObjects.list ():
-			if not isinstance (i, ZMedia) or i._id < 1:
+			if not isinstance (i, ZMedia):
 				continue
-			r = i.Resources.list ()
-			if len (r) < 1:
-				continue
-			r = r[0]
-			if r['Type'] in ('wav', 'mp3', 'fdl'):
-				self._sound[i.Id] = cart.data[i._id]
+			if cart['data'][i._id][0]:
+				self._sound[i.Id] = cart['data'][i._id][1]
 			else:
-				px = gtk.gdk.PixbufLoader ()
-				px.write (cart.data[i._id])
-				px.close ()
-				self._image[i.Id] = px.get_pixbuf ()
-	def _getmedia (self, cart, code, cbs):
-		class nocb:
-			def dialog (self, table):
-				pass
-			def message (self, table):
-				pass
-			def get_input (self, zinput):
-				pass
-			def play (self, media):
-				pass
-			def stop_sound (self):
-				pass
-			def set_status (self, text):
-				pass
-			def save (self):
-				pass
-			def quit (self):
-				pass
-			def drive_to (self, *a):
-				pass
-			def alert (self):
-				pass
-			def log (self, level, levelname, text):
-				pass
-			def show (self, screen, item):
-				pass
-			def update (self):
-				pass
-			def update_stats (self):
-				pass
-			def update_map (self):
-				pass
-		self._cb = nocb () if cbs is None else cbs
-		self._common_setup (cart, code)
+				self._image[i.Id] = cart['data'][i._id][1]
+	def _getmedia (self):
 		return [x for x in self.AllZObjects.list () if isinstance (x, ZMedia) and x._id > 0]
+	def _update (self, position, time):
+		self._time = time
+		# Update Timers. Do this before everything else, so Remaining is set correctly when callbacks are invoked.
+		for i in self.AllZObjects.list ():
+			if isinstance (i, ZTimer) and i._target != None:
+				i.Remaining = i._target - time
+		update_all = False
+		if not position:
+			return False
+		Player.ObjectLocation = ZonePoint (position.lat, position.lon, position.alt)
+		for i in self.AllZObjects.list ():
+			# Update all object distances and bearings.
+			if (isinstance (i, ZItem) and i.Container is not Player) or isinstance (i, ZCharacter):
+				if not i.Active:
+					continue
+				pos = i._get_pos ()
+				if not pos:
+					continue
+				i.CurrentDistance, i.CurrentBearing = VectorToPoint (Player.ObjectLocation, pos)
+			# Update container info, and call OnEnter or OnExit.
+			elif isinstance (i, Zone):
+				if i._active != i.Active:
+					# TODO: Doing this here means that OnSetActive fires after the lua callback has returned. Setting a zone active and immediately inactive doesn't make it fire, while it should make it fire twice.
+					i._active = i.Active
+					if hasattr (i, 'OnSetActive'):
+						#print 'OnSetActive %s' % i.Name
+						i.OnSetActive (i)
+						update_all = True
+				if not i.Active:
+					continue
+				inside = IsPointInZone (Player.ObjectLocation, i)
+				if inside != i._inside:
+					update_all = True
+					i._inside = inside
+					if inside:
+						if i._state == 'NotInRange' and hasattr (i, 'OnDistant') and i.OnDistant:
+							#print 'OnDistant 1 %s' % i.Name
+							i.OnDistant (i)
+						if i._state != 'Proximity' and hasattr (i, 'OnProximity') and i.OnProximity:
+							#print 'OnProximity %s' % i.Name
+							i.OnProximity (i)
+						if hasattr (i, 'OnEnter') and i.OnEnter:
+							#print 'OnEnter %s' % i.Name
+							i.OnEnter (i)
+					else:
+						#print 'no longer inside %s' % i.Name
+						if hasattr (i, 'OnExit') and i.OnExit:
+							#print 'OnExit %s' % i.Name
+							i.OnExit (i)
+				if inside:
+					i.State = 'Inside'
+					i._state = i.State
+				else:
+					# See how close we are.
+					i.CurrentDistance, i.CurrentBearing = VectorToZone (Player.ObjectLocation, i)
+					if i.CurrentDistance < i.ProximityRange:
+						if i._state == 'NotInRange' and hasattr (i, 'OnDistant') and i.OnDistant:
+							#print 'OnDistant 2 %s (from %s)' % (i.Name, i.State)
+							i.OnDistant (i)
+							update_all = True
+						i.State = 'Proximity'
+					elif i.DistanceRange < Distance (0) or i.CurrentDistance < i.DistanceRange:
+						if i._state == 'Inside' and hasattr (i, 'OnProximity') and i.OnProximity:
+							#print 'OnProximity %s' % i.Name
+							i.OnProximity (i)
+							update_all = True
+						i.State = 'Distant'
+					else:
+						if i._state == 'Inside' and hasattr (i, 'OnProximity') and i.OnProximity:
+							#print 'OnProximity %s' % i.Name
+							i.OnProximity (i)
+							update_all = True
+						if i._state in ('Inside', 'Proximity') and hasattr (i, 'OnDistant') and i.OnDistant:
+							#print 'OnDistant 3 %s (from %s)' % (i.Name, i.State)
+							i.OnDistant (i)
+							update_all = True
+						i.State = 'NotInRange'
+					if i.State != i._state:
+						#print 'new state for %s: %s' % (i.Name, i.State)
+						s = i._state
+						i._state = i.State
+						attr = 'On' + i.State
+						if hasattr (i, attr) and getattr (i, attr):
+							#print '%s %s (from %s)' % (attr, i.Name, s)
+							getattr (i, attr) (i)
+							update_all = True
+		return update_all
+	def _inside_list (self):
+		return [zone for zone in self.AllZObjects.list () if isinstance (zone, Zone) and zone.Active and zone._inside]
+	def _reschedule_timers (self):
+		for t in self.AllZObjects.list ():
+			if isinstance (t, ZTimer):
+				t._reschedule ()
 
 class ZCharacter (ZObject):
 	@_table_arg
@@ -377,11 +605,7 @@ class ZCharacter (ZObject):
 		#print 'making character'
 		ZObject.__init__ (self, Cartridge, Container)
 		self.name = 'Unnamed character'
-		self.InsideOfZones = _script.run ('return {}')[0]
-		self.Inventory = _script.run ('return {}')[0]
-		self.ObjectLocation = INVALID_ZONEPOINT
 		self.PositionAccuracy = Distance (5)
-		self.Visible = False
 
 class ZTimer (ZObject):
 	'A timer object allowing time or activity tracking.'
@@ -402,37 +626,47 @@ class ZTimer (ZObject):
 			print 'Not starting timer: already running.'
 			return
 		if self.OnStart:
-			print 'OnStart timer %s' % self.Name
+			#print 'OnStart timer %s' % self.Name
 			self.OnStart (self)
 		#print 'Timer started, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')])
 		if self.Remaining < 0:
 			self.Remaining = self.Duration
-		self._source = gobject.timeout_add (int (self.Remaining * 1000), self.Tick)
-		self._target = time.time () + self.Duration
+		self._source = _cb.add_timer (self.Remaining, self.Tick)
+		self._target = self.Cartridge._time + self.Duration
 	def Stop (self):
 		if self._target is None:
 			print 'Not stopping timer: not running.'
 			return
-		gobject.source_remove (self._source)
+		_cb.remove_timer (self._source)
 		self._target = None
 		self._source = None
 		if self.OnStop:
-			print 'OnStop %s' % self.Name
+			#print 'OnStop %s' % self.Name
 			self.OnStop (self)
 		#print 'Timer stopped, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')])
+	def _reschedule (self):
+		if self._target is None:
+			return
+		_cb.remove_timer (self._source)
+		self._source = _cb.add_timer (self.Remaining, self.Tick)
 	def Tick (self):
 		if self.Type == 'Interval':
+			now = self.Cartridge._time
+			# If this is called manually, skip the remaining time.
+			if self._target > now:
+				self._target = now
 			self._target += self.Duration
-			now = time.time ()
+			self._target.Remaining = self._target - now
+			# If execution is too slow, skip ticks.
 			if self._target < now:
 				self._target = now
-			self._source = gobject.timeout_add (int ((self._target - now) * 1000), self.Tick)
+			self._source = _cb.add_timer (self._target - now, self.Tick)
 		else:
 			self._target = None
 			self._source = None
 			self.Remaining = -1
 		if self.OnTick:
-			print 'OnTick %s' % self.Name
+			#print 'OnTick %s' % self.Name
 			self.OnTick (self)
 		#print 'Timer ticked, settings:\n' + '\n'.join (['%s:%s' % (x, getattr (self, x)) for x in dir (self) if not x.startswith ('_')])
 		return False
@@ -442,6 +676,8 @@ class ZInput (ZObject):
 	@_table_arg
 	def __init__ (self, Cartridge):
 		ZObject.__init__ (self, Cartridge)
+		self.OnGetInput = None
+		self.Text = ''
 
 class ZItem (ZObject):
 	'An item which can be placed in a zone or held by a character.'
@@ -455,14 +691,18 @@ class Zone (ZObject):
 	def __init__ (self, Cartridge, OriginalPoint = INVALID_ZONEPOINT, ShowObjects = 'OnEnter', State = 'NotInRange', Inside = False):
 		ZObject.__init__ (self, Cartridge)
 		self.OriginalPoint = OriginalPoint
+		self.Points = _script.make_list ()
 		self.ShowObjects = ShowObjects
 		self.State = State
-		self.Inside = Inside
-		self._inside = False
+		self._inside = Inside
 		self._active = True
-		self._state = 'NotInRange'
+		self._state = 'Inside' if Inside else 'NotInRange'
 		self.OnEnter = None
+		self.OnExit = None
+		self.OnProximity = None
 		self.OnDistant = None
+		self.ProximityRange = Distance (-1)
+		self.DistanceRange = Distance (-1)
 	def __str__ (self):
 		if hasattr (self, 'OriginalPoint'):
 			return '<Zone at %s>' % str (self.OriginalPoint)
@@ -474,6 +714,7 @@ class ZTask (ZObject):
 	@_table_arg
 	def __init__ (self, Cartridge):
 		ZObject.__init__ (self, Cartridge)
+		self.Complete = False
 
 class ZMedia (ZObject):
 	'A media file such as an image or sound.'
@@ -481,40 +722,39 @@ class ZMedia (ZObject):
 	def __init__ (self, Cartridge):
 		ZObject.__init__ (self, Cartridge)
 		self._id = Cartridge._mediacount
-		if Cartridge._mediacount > 0:
-			Cartridge._mediacount += 1
+		Cartridge._mediacount += 1
 
 # These functions are called from lua to make the application do things.
 def Dialog (table):
 	'Displays a dialog to the user. Parameter table may include two named values: Text, a string value containing the message to display; and Media, a ZMedia object to display in the dialog.'
-	ZCartridge ()._cb.dialog (table)
+	_cb.dialog (table)
 
 def MessageBox (table):
 	'Displays a dialog to the user with the possibility of user actions triggering additional events. Parameter table may take four named values: Text, a string value containing the message to display; Media, a ZMedia object to display in the dialog; Buttons, a table of strings to display as button options for the user; and Callback, a function reference to a function taking one parameter, the name of the button the user pressed to dismiss the dialog.'
-	ZCartridge ()._cb.message (table)
+	_cb.message (table)
 
 def GetInput (inp):
 	'Displays the provided ZInput dialog and returns the value entered or selected by the user.'
-	ZCartridge ()._cb.get_input (inp)
+	_cb.get_input (inp)
 
 def PlayAudio (media):
 	'Plays a sound file. Single parameter is a ZMedia object representing a sound file.'
-	ZCartridge ()._cb.play (media)
+	_cb.play (media)
 
 def ShowStatusText (text):
 	'Updates the status text displayed on PPC players to the specified value. At this time, the Garmin Colorado does not support status text.'
-	ZCartridge ()._cb.set_status (text)
+	_cb.set_status (text)
 
 def Command (text):
 	if text == 'SaveClose':
-		ZCartridge ()._cb.save ()
-		ZCartridge ()._cb.quit ()
+		_cb.save ()
+		_cb.quit ()
 	elif text == 'DriveTo':
-		ZCartridge ()._cb.drive_to ()
+		_cb.drive_to ()
 	elif text == 'StopSound':
-		ZCartridge ()._cb.stop_sound ()
+		_cb.stop_sound ()
 	elif text == 'Alert':
-		ZCartridge ()._cb.alert ()
+		_cb.alert ()
 	else:
 		raise AssertionError ('unknown command %s' % text)
 
@@ -526,23 +766,27 @@ def LogMessage (text, level = LOGCARTRIDGE):
 		text = text['Text']
 	level = int (level + .5)
 	assert 0 <= level < _log_names
-	ZCartridge ()._cb.log (level, _log_names[level], text)
+	_cb.log (level, _log_names[level], text)
 
 def ShowScreen (screen, item = None):
 	'Switches the currently displayed screen to one specified by the screen parameter. The several SCREEN constants defined in the Wherigo object allow the screen to be specified. If DETAILSCREEN is specified, the optional second parameter item specifies the zone, character, item, etc. to display the detail screen of.'
 	screen = int (screen + .5)
 	assert 0 <= screen < len (_screen_names)
-	ZCartridge ()._cb.show (screen, item)
+	_cb.show (screen, item)
 
 # These functions seem to be for doing dirty work which is too slow or annoying in lua...
 def NoCaseEquals (s1, s2):
 	'Compares two strings for equality, ignoring case. Uncertain parameters.'
-	return s1.lower () == s2.lower ()
+	if isinstance (s1, str):
+		s1 = s1.lower ()
+	if isinstance (s2, str):
+		s2 = s2.lower ()
+	return s1 == s2
 
-def Inject ():
-	'Unknown parameters and function.'
-	print sys._getframe().f_code.co_name
-	pass
+# This class exists according to the documentation, but I've not seen any use of it by an actual cartridge.
+#def Inject ():
+#	'Unknown parameters and function.'
+#	pass
 
 def _intersect (point, segment, name = ''):
 	'Compute whether a line from the north pole to point intersects with the segment. Return 0 or 1.'
