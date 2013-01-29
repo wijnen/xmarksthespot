@@ -329,7 +329,7 @@ class List (gtk.ScrolledWindow):
 		attr = 'On' + name
 		cmd = self.selected_item.Commands[name]
 		if hasattr (self.selected_item, attr):
-			print attr + ' ' + self.selected_item.Name
+			#print attr + ' ' + self.selected_item.Name
 			getattr (self.selected_item, attr) (self.selected_item, item)
 			cbs.update ()
 		else:
@@ -746,17 +746,17 @@ class CB:
 	def drive_to (self, *a):
 		self.update ()
 		print ("I'm supposed to drive to", a)
-		# which is?
 		# TODO
 	def alert (self):
 		self.update ()
 		print 'alert!'
-		# Note: this doesn't do anything (on machines without a pc speaker?)
+		# Note: this doesn't do anything (on machines without a pc speaker? TODO)
 		gtk.gdk.beep ()
 	def log (self, level, levelname, text):
 		self.update ()
 		if level >= minloglevel:
-			print 'Log %s: %s' % (levelname, text)
+			logline = '%s|%f|%f|%f|%f|%s: %s' % (time.strftime ('%Y%m%d%H%M%S', time.gmtime ()), wherigo.Player.ObjectLocation.Latitude, wherigo.Player.ObjectLocation.Longitude, wherigo.Player.ObjectLocation.Altitude, wherigo.Player.Precision, levelname, text)
+			print (logline)
 			log.add_log (level, levelname, text)
 	def show (self, screen, item):
 		# 'Detail', 'Inventory', 'Item', 'Location', 'Main', 'Tasks'
@@ -846,6 +846,7 @@ def next_message (widget = None, name = None, item = None):
 			# Argument is passed to button callback.
 			if 'Callback' in m:
 				# for Ok buttons, name is used; for choices, item is used. Allow both.
+				#print 'Callback'
 				m['Callback'] (name if item is None else item)
 				cbs.update ()
 			else:
@@ -940,7 +941,7 @@ def open_cartridge (cartfile):
 		settings.show_start = False
 		if gameobject.OnStart:
 			print 'OnStart'
-			gameobject.OnStart ()
+			gameobject.OnStart (gameobject)
 		cbs.update ()
 
 	file_new (None)

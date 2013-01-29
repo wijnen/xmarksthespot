@@ -14,14 +14,14 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# All spherical math formulae were taken from http://www.movable-type.co.uk/scripts/latlong.html
+# All spherical _math formulae were taken from http://www.movable-type.co.uk/scripts/latlong.html
 
-import math
-import lua
-import struct
-import zipfile
-import os
-import sys
+import math as _math
+import lua as _lang
+import struct as _struct
+import zipfile as _zipfile
+import os as _os
+import sys as _sys
 
 INVALID_ZONEPOINT = False	# Constant representing a coordinate which does not exist, used to indicate that a variable should not hold a real value.
 
@@ -50,8 +50,9 @@ _cb = None
 def _table_arg (f):
 	'''Decorator for functions allowing a table as a single argument.'''
 	def ret (self, *a, **ka):
-		if len (ka) > 0 or len (a) > 1 or not isinstance (a[0], lua.Table):
+		if len (ka) > 0 or len (a) > 1 or not isinstance (a[0], _lang.Table):
 			return f (self, *a, **ka)
+		print a[0].dict ()
 		return f (self, **a[0].dict ())
 	return ret
 
@@ -63,15 +64,15 @@ def _load (file, cbs, config):
 	_cb = cbs
 	_CARTID = '\x02\x0aCART\x00'
 	def _short (file, pos):
-		ret = struct.unpack ('<h', file[pos[0]:pos[0] + 2])[0]
+		ret = _struct.unpack ('<h', file[pos[0]:pos[0] + 2])[0]
 		pos[0] += 2
 		return ret
 	def _int (file, pos):
-		ret = struct.unpack ('<i', file[pos[0]:pos[0] + 4])[0]
+		ret = _struct.unpack ('<i', file[pos[0]:pos[0] + 4])[0]
 		pos[0] += 4
 		return ret
 	def _double (file, pos):
-		ret = struct.unpack ('<d', file[pos[0]:pos[0] + 8])[0]
+		ret = _struct.unpack ('<d', file[pos[0]:pos[0] + 8])[0]
 		pos[0] += 8
 		return ret
 	def _string (file, pos):
@@ -82,11 +83,11 @@ def _load (file, cbs, config):
 		pos[0] = p + 1
 		return ret
 	def _wshort (num):
-		return struct.pack ('<h', num)
+		return _struct.pack ('<h', num)
 	def _wint (num):
-		return struct.pack ('<i', num)
+		return _struct.pack ('<i', num)
 	def _wdouble (num):
-		return struct.pack ('<d', num)
+		return _struct.pack ('<d', num)
 	def _wstring (s):
 		assert '\0' not in s
 		return s + '\0'
@@ -121,6 +122,15 @@ def _load (file, cbs, config):
 		data['TargetDevice'] = _string (file, pos)
 		pos[0] += 4
 		data['CompletionCode'] = _string (file, pos)
+		data['Copyright'] = 'copyright not included in gwc'
+		data['License'] = 'license not included in gwc'
+		data['Company'] = 'company not included in gwc'
+		data['BuilderVersion'] = 'builder version not included in gwc'
+		data['CreateDate'] = 'create date not included in gwc'
+		data['UpdateDate'] = 'update date not included in gwc'
+		data['PublishDate'] = 'publish date not included in gwc'
+		data['LastPlayedDate'] = 'last played date not included in gwc'
+		data['TargetDeviceVersion'] = 'target device version not included in gwc'
 		assert pos[0] == len (_CARTID) + 2 + num * 6 + 4 + size
 		# read lua bytecode.
 		pos[0] = offset[0]
@@ -140,34 +150,34 @@ def _load (file, cbs, config):
 		d = {}
 		code = None	# This is the name of the lua code file.
 		if isdir:
-			names = os.listdir (gwz)
+			names = _os.listdir (gwz)
 		else:
-			z = zipfile.ZipFile (gwz, 'r')
+			z = _zipfile.ZipFile (gwz, 'r')
 			names = z.namelist ()
 		for n in names:
 			ln = n.lower ()
 			assert ln not in d
 			if isdir:
-				d[ln] = open (os.path.join (gwz, n), 'rb').read ()
+				d[ln] = open (_os.path.join (gwz, n), 'rb').read ()
 			else:
 				d[ln] = z.read (n)
-			if os.path.splitext (ln)[1] == os.extsep + 'lua':
+			if _os.path.splitext (ln)[1] == _os.extsep + 'lua':
 				assert code is None
 				code = ln
 		# There must be lua code.
 		assert code is not None
 		data['data'] = [d.pop (code)]
 		# Set up extra properties. These should later come from a metadata file.
-		for key in ('Name', 'Version', 'Description', 'Author', 'Copyright', 'Company', 'Activity', 'StartingLocationDescription', 'BuilderVersion', 'Media', 'Icon', 'CreateDate', 'UpdateDate'):
+		for key in ('Name', 'Version', 'Description', 'Author', 'Copyright', 'License', 'Company', 'Activity', 'StartingLocationDescription', 'BuilderVersion', 'Media', 'Icon', 'CreateDate', 'UpdateDate'):
 			data[key] = ''
 		for key in ('Latitude', 'Longitude', 'Altitude'):
 			data[key] = 0.0
 		# Set up compile-time settings.
 		for key in ('URL', 'TargetDevice', 'TargetDeviceVersion', 'PlayerName', 'CompletionCode', 'Id', 'PublishDate'):
-			data[key] = config[key]
+			data[key] = config[key] if key in config else ''
 		# Set up boot-time settings.
-		for key in ('LastPlayedDate'):
-			data[key] = config[key]
+		for key in ('LastPlayedDate',):
+			data[key] = config[key] if key in config else ''
 		return d
 	def _read_gwz_2 (data, d, config):
 		cartridge = ZCartridge._setup (data)
@@ -184,20 +194,19 @@ def _load (file, cbs, config):
 			n = r['Filename']
 			map[n.lower ()] = m + 1
 			data['data'][m + 1] = (t in ('wav', 'mp3', 'fdl', 'ogg', 'flac', 'au'), d.pop (n.lower ()))
-		if cartridge.Icon
 		if len (d) != 0:
 			print 'ignoring unused media: %s.' % (', '.join (d.keys ()))
 		cartridge._setup_media (data)
 		return cartridge
 	# Prepare the lua parser.
-	_script = lua.lua ()
-	_script.module ('Wherigo', sys.modules[__name__])
+	_script = _lang.lua ()
+	_script.module ('Wherigo', _sys.modules[__name__])
 	data = {}
 	if type (file) is not str:
 		file = file.read ()
 	if not file.startswith (_CARTID):
 		filename = file
-		if os.path.isdir (file):
+		if _os.path.isdir (file):
 			# This is a gwz directory.
 			gwc = False
 			d = _read_gwz (data, file, True, config)
@@ -220,7 +229,7 @@ def _load (file, cbs, config):
 			env[i[4:]] = config[i]
 	env['Downloaded'] = int (env['Downloaded'])
 	if not env['CartFilename']:
-		env['CartFilename'] = os.path.splitext (filename)[0]
+		env['CartFilename'] = _os.path.splitext (filename)[0]
 	if not env['Device']:
 		env['Device'] = data['TargetDevice']
 	_script.run ('', 'Env', env, name = 'setting Env')
@@ -255,7 +264,9 @@ class Distance:
 		else:
 			raise AssertionError ('invalid length unit %s' % units)
 	@_table_arg
-	def GetValue (self, units = 'meters'):
+	def GetValue (self, units = 'meters', **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to Distance: %s\n' % ka)
 		if units in ('feet', 'ft'):
 			return self.value / 1609.344 * 5280.
 		elif units == 'miles':
@@ -279,13 +290,16 @@ class Distance:
 class ZCommand (object):
 	'A command usable on a character, item, zone, etc. Included in ZCharacter.Commands table.'
 	@_table_arg
-	def __init__ (self, Cartridge, Text = '', EmptyTargetListText = '', Enabled = True, CmdWith = False, WorksWithAll = False, WorksWithList = None):
+	def __init__ (self, Cartridge = None, Text = '', EmptyTargetListText = '', Enabled = True, CmdWith = False, WorksWithAll = False, WorksWithList = None, MakeReciprocal = True, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZCommand: %s\n' % ka)
 		self.Text = Text
 		self.EmptyTargetListText = EmptyTargetListText
 		self.Enabled = Enabled
 		self.CmdWith = CmdWith
 		self.WorksWithAll = WorksWithAll
 		self.WorksWithList = WorksWithList if WorksWithList is not None  else _script.make_table ()
+		self.MakeReciprocal = MakeReciprocal
 	def x__getattribute__ (self, key):
 		k = 'Get' + key
 		obj = super (ZCommand, self)
@@ -298,7 +312,9 @@ class ZCommand (object):
 
 class ZObject (object):
 	@_table_arg
-	def __init__ (self, Cartridge, Container = None):
+	def __init__ (self, Cartridge, Container = None, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZObject: %s\n' % ka)
 		self.Active = True
 		self.Container = None
 		self.Commands = _script.make_table ()
@@ -403,7 +419,9 @@ class ZObject (object):
 class ZonePoint (object):
 	'A specific geographical point, or the INVALID_ZONEPOINT constant to represent no value.'
 	@_table_arg
-	def __init__ (self, latitude, longitude, altitude):
+	def __init__ (self, latitude = 0, longitude = 0, altitude = 0, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZonePoint: %s\n' % ka)
 		# Don't trigger update_map when constructing new ZonePoints.
 		object.__setattr__ (self, 'latitude', latitude)
 		object.__setattr__ (self, 'longitude', longitude)
@@ -466,6 +484,8 @@ class ZCartridge (ZObject):
 		self.Complete = False	# ?
 		del ZCartridge._settings
 		self._mediacount = 1
+	def GetAllOfType (self, type):
+		return _script.make_table ([x for x in self.AllZObjects if isinstance (x, ZObject) and x.__class__.__name__ == type])
 	def RequestSync (self):
 		_cb.save ()
 	@classmethod
@@ -484,7 +504,6 @@ class ZCartridge (ZObject):
 		# For technical reasons, the python value wherigo.Player is not available in lua without the statement below. See python-lua manual page for details.
 		_script.run ('Wherigo.Player = Player', 'Player', Player, name = 'setting Player variable')
 		ret = _script.run (cart['data'][0], name = 'cartridge setup')[0]
-		Player.Cartridge = self
 		# Create a starting marker object, which can be used for drawing a marker on the map, but which is invisible for the cartridge.
 		global _starting_marker
 		_starting_marker = ZItem (ret)
@@ -498,6 +517,8 @@ class ZCartridge (ZObject):
 		self._sound = {}
 		for i in self.AllZObjects.list ():
 			if not isinstance (i, ZMedia):
+				continue
+			if i._id not in cart['data']:
 				continue
 			if cart['data'][i._id][0]:
 				self._sound[i.Id] = cart['data'][i._id][1]
@@ -601,7 +622,9 @@ class ZCartridge (ZObject):
 
 class ZCharacter (ZObject):
 	@_table_arg
-	def __init__ (self, Cartridge, Container = None):
+	def __init__ (self, Cartridge, Container = None, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZCharacter: %s\n' % ka)
 		#print 'making character'
 		ZObject.__init__ (self, Cartridge, Container)
 		self.name = 'Unnamed character'
@@ -611,14 +634,16 @@ class ZTimer (ZObject):
 	'A timer object allowing time or activity tracking.'
 	# attributes: Type ('Countdown'|'Interval'), Duration (Number), Id, Name, Visible
 	@_table_arg
-	def __init__ (self, Cartridge):
+	def __init__ (self, Cartridge, Type = 'Countdown', Duration = -1, Remaining = -1, OnStart = None, OnStop = None, OnTick = None, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZTimer: %s\n' % ka)
 		ZObject.__init__ (self, Cartridge)
-		self.Type = 'Countdown'
-		self.Duration = -1
-		self.Remaining = -1
-		self.OnStart = None
-		self.OnStop = None
-		self.OnTick = None
+		self.Type = Type
+		self.Duration = Duration
+		self.Remaining = Remaining
+		self.OnStart = OnStart
+		self.OnStop = OnStop
+		self.OnTick = OnTick
 		self._target = None	# time for next tick, or None.
 		self._source = None
 	def Start (self):
@@ -674,35 +699,41 @@ class ZTimer (ZObject):
 class ZInput (ZObject):
 	'A user input field.'
 	@_table_arg
-	def __init__ (self, Cartridge):
+	def __init__ (self, Cartridge, Text = '', OnGetInput = None, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZInput: %s\n' % ka)
 		ZObject.__init__ (self, Cartridge)
-		self.OnGetInput = None
-		self.Text = ''
+		self.Text = Text
+		self.OnGetInput = OnGetInput
 
 class ZItem (ZObject):
 	'An item which can be placed in a zone or held by a character.'
 	@_table_arg
-	def __init__ (self, Cartridge, Container = None):
+	def __init__ (self, Cartridge, Container = None, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZItem: %s\n' % ka)
 		ZObject.__init__ (self, Cartridge, Container)
 
 class Zone (ZObject):
 	'Geographical area defined by several ZonePoints.'
 	@_table_arg
-	def __init__ (self, Cartridge, OriginalPoint = INVALID_ZONEPOINT, ShowObjects = 'OnEnter', State = 'NotInRange', Inside = False):
+	def __init__ (self, Cartridge, OriginalPoint = INVALID_ZONEPOINT, ShowObjects = 'OnEnter', State = 'NotInRange', Inside = False, OnEnter = None, OnExit = None, OnProximity = None, OnDistant = None, ProximityRange = Distance (-1), DistanceRange = Distance (-1), **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to Zone: %s\n' % ka)
 		ZObject.__init__ (self, Cartridge)
 		self.OriginalPoint = OriginalPoint
-		self.Points = _script.make_list ()
+		self.Points = _script.make_table ()
 		self.ShowObjects = ShowObjects
 		self.State = State
 		self._inside = Inside
 		self._active = True
 		self._state = 'Inside' if Inside else 'NotInRange'
-		self.OnEnter = None
-		self.OnExit = None
-		self.OnProximity = None
-		self.OnDistant = None
-		self.ProximityRange = Distance (-1)
-		self.DistanceRange = Distance (-1)
+		self.OnEnter = OnEnter
+		self.OnExit = OnExit
+		self.OnProximity = OnProximity
+		self.OnDistant = OnDistant
+		self.ProximityRange = ProximityRange
+		self.DistanceRange = DistanceRange
 	def __str__ (self):
 		if hasattr (self, 'OriginalPoint'):
 			return '<Zone at %s>' % str (self.OriginalPoint)
@@ -712,14 +743,19 @@ class Zone (ZObject):
 class ZTask (ZObject):
 	'A task the user can attempt to accomplish.'
 	@_table_arg
-	def __init__ (self, Cartridge):
+	def __init__ (self, Cartridge, Complete = False, CorrectState = False, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZTask: %s\n' % ka)
 		ZObject.__init__ (self, Cartridge)
-		self.Complete = False
+		self.Complete = Complete
+		self.CorrectState = CorrectState
 
 class ZMedia (ZObject):
 	'A media file such as an image or sound.'
 	@_table_arg
-	def __init__ (self, Cartridge):
+	def __init__ (self, Cartridge, **ka):
+		if len (ka) > 0:
+			sys.stderr.write ('unknown commands given to ZMedia: %s\n' % ka)
 		ZObject.__init__ (self, Cartridge)
 		self._id = Cartridge._mediacount
 		Cartridge._mediacount += 1
@@ -824,13 +860,13 @@ def VectorToSegment (point, p1, p2):
 	'Unknown parameters and function.'
 	# Compute shortest distance and bearing to get from point to anywhere on segment.
 	d1, b1 = VectorToPoint (p1, point)
-	d1 = math.radians (d1.GetValue ('nauticalmiles') / 60.)
+	d1 = _math.radians (d1.GetValue ('nauticalmiles') / 60.)
 	ds, bs = VectorToPoint (p1, p2)
-	dist = math.asin (math.sin (d1) * math.sin (math.radians (b1.value - bs.value)))
-	dat = math.acos (math.cos (d1) / math.cos (dist))
+	dist = _math.asin (_math.sin (d1) * _math.sin (_math.radians (b1.value - bs.value)))
+	dat = _math.acos (_math.cos (d1) / _math.cos (dist))
 	if dat <= 0:
 		return VectorToPoint (point, p1)
-	elif dat >= math.radians (ds.GetValue ('nauticalmiles') / 60.):
+	elif dat >= _math.radians (ds.GetValue ('nauticalmiles') / 60.):
 		return VectorToPoint (point, p2)
 	intersect = TranslatePoint (p1, Distance (dat * 60, 'nauticalmiles'), bs)
 	return VectorToPoint (point, intersect)
@@ -854,16 +890,16 @@ def VectorToPoint (p1, p2):
 	# Special case for points on the same longitude (in particular, for p1 == p2).
 	if p1.longitude == p2.longitude:
 		return Distance (abs (p1.latitude - p2.latitude) * 60, 'nauticalmiles'), Bearing (0 if p1.latitude <= p2.latitude else 180)
-	lat1 = math.radians (p1.latitude)
-	lon1 = math.radians (p1.longitude)
-	lat2 = math.radians (p2.latitude)
-	lon2 = math.radians (p2.longitude)
+	lat1 = _math.radians (p1.latitude)
+	lon1 = _math.radians (p1.longitude)
+	lat2 = _math.radians (p2.latitude)
+	lon2 = _math.radians (p2.longitude)
 	# Formula of haversines. This is a numerically stable way of determining the distance.
-	dist = 2 * math.asin (math.sqrt (math.sin ((lat1 - lat2) / 2) ** 2 + math.cos (lat1) * math.cos (lat2) * math.sin ((lon1 - lon2) / 2) ** 2))
+	dist = 2 * _math.asin (_math.sqrt (_math.sin ((lat1 - lat2) / 2) ** 2 + _math.cos (lat1) * _math.cos (lat2) * _math.sin ((lon1 - lon2) / 2) ** 2))
 	# And the bearing.
-	bearing = math.atan2 (math.sin (lon2 - lon1) * math.cos(lat2), math.cos (lat1) * math.sin (lat2) - math.sin (lat1) * math.cos (lat2) * math.cos (lon2 - lon1))
+	bearing = _math.atan2 (_math.sin (lon2 - lon1) * _math.cos(lat2), _math.cos (lat1) * _math.sin (lat2) - _math.sin (lat1) * _math.cos (lat2) * _math.cos (lon2 - lon1))
 	# To get a distance, use nautical miles: 1 nautical mile is by definition equal to 1 minute, so 60 nautical miles is 1 degree.
-	return Distance (math.degrees (dist) * 60, 'nauticalmiles'), Bearing (math.degrees (bearing))
+	return Distance (_math.degrees (dist) * 60, 'nauticalmiles'), Bearing (_math.degrees (bearing))
 
 def TranslatePoint (point, distance, bearing):
 	'''Returns a ZonePoint object calculated by starting at the provided point and moving Distance from that point at the specified angle.
@@ -871,9 +907,9 @@ def TranslatePoint (point, distance, bearing):
 		startzonepoint is an instance of ZonePoint,
 		distance is an instance of Distance,
 		and bearing is an Instance of Bearing.'''
-	d = math.radians (distance.GetValue ('nauticalmiles') / 60.)
-	b = math.radians (bearing.value)
-	lat1 = math.radians (point.latitude)
-	lat2 = math.asin (math.sin (lat1) * math.cos (d) + math.cos (lat1) * math.sin (d) * math.cos(b))
-	dlon = math.atan2 (math.sin(b) * math.sin (d) * math.cos (lat1), math.cos (d) - math.sin (lat1) * math.sin (lat2))
-	return ZonePoint (math.degrees (lat2), point.longitude + math.degrees (dlon), point.altitude)
+	d = _math.radians (distance.GetValue ('nauticalmiles') / 60.)
+	b = _math.radians (bearing.value)
+	lat1 = _math.radians (point.latitude)
+	lat2 = _math.asin (_math.sin (lat1) * _math.cos (d) + _math.cos (lat1) * _math.sin (d) * _math.cos(b))
+	dlon = _math.atan2 (_math.sin(b) * _math.sin (d) * _math.cos (lat1), _math.cos (d) - _math.sin (lat1) * _math.sin (lat2))
+	return ZonePoint (_math.degrees (lat2), point.longitude + _math.degrees (dlon), point.altitude)
