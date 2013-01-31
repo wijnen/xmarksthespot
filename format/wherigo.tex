@@ -51,6 +51,7 @@ Throughout this document, the following definitions are used:
 	\item Compile Time: when a cartridge is compiled by a Compiler.
 	\item Boot Time: the initial run of a Cartridge's code.
 	\item Run Time: the main phase of the game.
+	\item Table: a lua table.
 \end{enumerate}
 
 \section{Cartridge startup}
@@ -59,7 +60,7 @@ Cartridge. The Engine MUST then perform at least the following actions, in this
 order:
 
 \begin{enumerate}
-\item Create a clean lua environment.
+\item Create a clean lua 5.1 environment.
 \item Add the ``Wherigo'' module, described below, to the environment.
 \item Create Wherigo.Player, described below. Wherigo.Player.Cartridge MUST be set to nil.
 \item Run the lua code from \verb-_cartridge.lua-. This returns the Game Object. This code is running during Boot Time.
@@ -70,15 +71,15 @@ order:
 
 \section{The Lua operating environment.}
 
-The Cartridge code runs in a clean lua environment. Everything that is specific
-to Wherigo is in the Wherigo module. Below is a description of all its
-contents. Engines MAY include more members inside the Wherigo module
-for internal use. Anything that is not defined in this document MUST NOT be
-used by Authors or Builders. This includes creating new objects. Engines
-MUST NOT use any variable outside of the Wherigo module directly.
+The Cartridge code runs in a clean lua 5.1 environment. Everything that is
+specific to Wherigo is in the Wherigo module. Below is a description of all its
+contents. Engines MAY include more members inside the Wherigo module for
+internal use. Anything that is not defined in this document MUST NOT be used by
+Authors or Builders. This includes creating new objects. Engines MUST NOT
+create or modify any variable outside of the Wherigo module.
 
-All constructors can be called with a table as a single argument. The keys in
-the table are initial values for the attributes of the object that is
+All constructors can be called with a Table as a single argument. The keys in
+the Table are initial values for the attributes of the object that is
 constructed.
 
 Unless otherwise noted, all functions are methods. This includes event
@@ -123,7 +124,7 @@ Player.ObjectLocation is set to \verb-INVALID_ZONEPOINT- during Boot Time.
 Any code which depends on the Player location MUST NOT be run at Boot Time.
 At Run Time, the coordinates will be valid.
 
-Player.InsideOfZones is a table of Zones that the Player is inside of.
+Player.InsideOfZones is a Table of Zones that the Player is inside of.
 
 \subsection{Classes}
 All classes start with a capital letter. In these descriptions, member
@@ -132,7 +133,7 @@ lowercase letters. Argument values in square brackets are optional. Their
 default values are given in the explanation.
 
 All ZObject constructors take either a ZCartridge as their first argument, or a
-table with a Cartridge key in it and optionally more keys. This is not
+Table with a Cartridge key in it and optionally more keys. This is not
 explained every time. The cartridge must be the Game Object.
 
 Classes which have a class name in parentheses after their own name are a
@@ -142,65 +143,65 @@ for these is not repeated.
 \subsubsection{ZObject}
 Base class for all objects. This should never be constructed directly, but only
 as part of a subclass.
-\funcdef{ZObject.made (object)}{boolean}{object: the object to be tested}{Tests whether an object is made by (is an instance of) this class. It will only return true if the tested object is of the calling class, or of a subclass of it. This is a class-method, it does not take a self object as first argument, and must not be called with `:'.}
 \funcdef{zobject:Contains (object)}{boolean}{object: ZObject which is tested for being inside this one.}{Return true if zobject is the Container of object, or if zobject:Contains (object.Container). As a special case, if zobject is a Zone and object is Player, return IsPointInZone (Player.ObjectLocation, zobject)}
+\funcdef{ZObject.made (object)}{boolean}{object: the object to be tested}{Tests whether an object is made by (is an instance of) this class. It will only return true if the tested object is of the calling class, or of a subclass of it. This is a class-method, it does not take a self object as first argument, and must not be called with `:'.}
 \funcdef{zobject:MoveTo (container)}{nil}{container: new owner of zobject, or nil}{Remove zobject from its current container, and optionally into a new one. All Container and Inventory properties are changed accordingly.}
 \attrdef{Active}{Boolean}{Non-active objects are ignored for all events, and are not shown in any UI elements.}
+\attrdef{Cartridge}{ZCartridge}{The Game Object.}
+\attrdef{Commands}{Table of ZCommand}{Commands which may be available with this object. Only valid for ZItem and Zone.}
 \attrdef{Container}{ZObject}{ZObject that contains this object. Always a Zone, or ZItem. This attribute is read-only; it is updated automatically when using MoveTo.}
 \attrdef{CurrentBearing}{number}{Direction from the Player to this object. 0 if the Player contains this object.}
 \attrdef{CurrentDistance}{Distance}{Distance from the Player to this object. 0 if the Player contains this object.}
 \attrdef{Description}{String}{Description of this ZObject. For objects which can appear in the UI, this is shown as their details.}
 \attrdef{Icon}{ZMedia}{Image which represents this ZObject. This can be used as an icon when the object is shown in a list.}
-\attrdef{Media}{ZMedia}{Image which represents this ZObject. This can be used when a larger image is required, usually for the object's details.}
 \attrdef{Inventory}{Table of ZObject}{A list of all objects which have this ZObject set as their Container. This attribute is read-only; it is updated automatically when using MoveTo.}
+\attrdef{Media}{ZMedia}{Image which represents this ZObject. This can be used when a larger image is required, usually for the object's details.}
 \attrdef{Name}{String}{Name of this object. Used when presenting this object in the UI.}
 \attrdef{ObjectLocation}{ZonePoint}{Current location of this ZObject.}
+\attrdef{On\textit{CommandName}}{Function}{These event callbacks are available for ZItem and Zone objects, once for each ZCommand that is available for it. \textit{CommandName} is the key of the command in the Commands Table. It is triggered by selecting the command. See ZCommand for details.}
 \attrdef{Visible}{Boolean}{This ZObject is not shown in the UI unless this is set. It does respond normally to events though (unless inactive).}
-\attrdef{Cartridge}{ZCartridge}{The Game Object.}
-\attrdef{On\textit{CommandName}}{Function}{These event callbacks are available for ZItem and Zone objects, once for each ZCommand that is available for it. \textit{CommandName} is the name of the command. It is triggered by selecting the command. See ZCommand for details.}
 
 \subsubsection{ZCartridge (ZObject)}
 The class for the Game Object. There is always exactly one of these. It is
 initialized with the metadata from the Cartridge, and holds some tables which
 can be used to reach objects in the game.
 \funcdef{ZCartridge ()}{ZCartridge}{-}{Constructor. Unlike other ZObject subclasses, this constructor does not need to receive the Game Object (for obvious reasons).}
+\funcdef{zcartridge:GetAllOfType (type)}{Table of ZObjects}{String: type name to search for}{Return all items in zcartridge.AllZObjects of the requested type. Possible types are ZCartridge, ZItem, Zone, ZMedia, ZTask, ZTimer, and ZInput.}
 \funcdef{zcartridge:RequestSync ()}{nil}{}{Save the current state of the Game. More information on saving is below.}
-\funcdef{zcartridge:GetAllOfType (type)}{Table of ZObjects}{String: type name to search for}{Return all items in zcartridge.AllZObjects of the requested type.}
 \attrdef{AllZObjects}{Table of ZObject}{List of all ZObjects in this Cartridge. This attribut is read-only. It is automatically updated when ZObjects are created or destroyed.}
-\attrdef{ZVariables}{Table of strings or numbers}{All variables which need to be saved must be in this table. The keys are variable names; the values are their values. This table is not kept synchronized during game play. This happens just before the game is saved.}
-\attrdef{OnStart}{Function}{Event, called when the game is started.}
-\attrdef{OnEnd}{Function}{Event, called when the game ends.}
-\attrdef{OnSync}{Function}{Event, called just before saving a game.}
-\attrdef{OnRestore}{Function}{Event, called immediately after loading a saved game.}
-\attrdef{Version}{String}{Version from the metadata.}
-\attrdef{Author}{String}{Version from the metadata.}
-\attrdef{Copyright}{String}{Copyright claim from the metadata.}
-\attrdef{License}{String}{License from the metadata. Only the short part; the Long Value is not included.}
-\attrdef{Company}{String}{Company from the metadata.}
 \attrdef{Activity}{String}{Activity from the metadata.}
+\attrdef{Author}{String}{Version from the metadata.}
+\attrdef{BuilderVersion}{String}{BuilderVersion from the metadata.}
+\attrdef{Company}{String}{Company from the metadata.}
+\attrdef{CreateDate}{String}{CreateDate from the metadata.}
+\attrdef{Copyright}{String}{Copyright claim from the metadata.}
+\attrdef{Icon}{ZMedia}{Icon from the metadata.}
+\attrdef{LastPlayedDate}{String}{LastPlayedDate from the metadata.}
+\attrdef{License}{String}{License from the metadata. Only the short part; the Long Value is not included.}
+\attrdef{Media}{ZMedia}{Media from the metadata.}
+\attrdef{OnEnd}{Function}{Event, called when the game ends.}
+\attrdef{OnRestore}{Function}{Event, called immediately after loading a saved game.}
+\attrdef{OnStart}{Function}{Event, called when the game is started.}
+\attrdef{OnSync}{Function}{Event, called just before saving a game.}
+\attrdef{PublishDate}{String}{PublishDate from the metadata.}
 \attrdef{StartingLocation}{ZonePoint}{StartingLocation from the metadata.}
 \attrdef{StartingLocationDescription}{String}{StartingLocationDescription from the metadata.}
-\attrdef{BuilderVersion}{String}{BuilderVersion from the metadata.}
-\attrdef{CreateDate}{String}{CreateDate from the metadata.}
-\attrdef{UpdateDate}{String}{UpdateDate from the metadata.}
-\attrdef{Icon}{ZMedia}{Icon from the metadata.}
-\attrdef{Media}{ZMedia}{Media from the metadata.}
 \attrdef{TargetDevice}{ZMedia}{TargetDevice from the metadata.}
 \attrdef{TargetDeviceVersion}{String}{TargetDeviceVersion from the metadata.}
-\attrdef{PublishDate}{String}{PublishDate from the metadata.}
-\attrdef{LastPlayedDate}{String}{LastPlayedDate from the metadata.}
+\attrdef{UpdateDate}{String}{UpdateDate from the metadata.}
+\attrdef{Version}{String}{Version from the metadata.}
+\attrdef{ZVariables}{Table of strings or numbers}{All variables which need to be saved must be in this Table. The keys are variable names; the values are their values. This Table is not kept synchronized during game play. This happens just before the game is saved.}
 
 \subsubsection{ZItem (ZObject)}
 An entity in the game, which is supposed to be lifeless. These can often be picked up, for example.
 \funcdef{ZItem (Cartridge)}{ZItem}{-}{Constructor.}
-\attrdef{Commands}{Table of ZCommand}{Commands which may be available with this ZItem.}
 
 \subsubsection{ZonePoint}
 Position on the globe.
 \funcdef{ZonePoint (latitude, longitude, altitude)}{ZonePoint}{Coordinates.}{Constructor.}
-\attrdef{Latitude}{number}{Latitude.}
-\attrdef{Longitude}{number}{Longitude.}
-\attrdef{Altitude}{number}{Altitude.}
+\attrdef{altitude}{number}{Altitude.}
+\attrdef{latitude}{number}{Latitude.}
+\attrdef{longitude}{number}{Longitude.}
 
 \subsubsection{Zone (ZObject)}
 A region on the globe. The region is defined by its perimiter and a point
@@ -212,14 +213,14 @@ point inside the region defines which of the parts is inside and which is not.
 If the Player's coordinate changes in a big step, for whatever reason, all callbacks that should have been called if it had changed in small steps must be called. For example, if a Zone is constructed with State NotInRange and positive ProximityRange and DistanceRange, and the Player is inside it, OnDistant, OnProximity and OnEnter must all be called (in that order) immediately.
 
 \funcdef{Zone (Cartridge)}{Zone}{-}{Constructor.}
+\attrdef{OnDistant}{Function}{Event, triggered when the Player enters the \textit{Distant} ring of a Zone. Note that this can be entered from Proximity and from NotInRange, and if Proximity is set to a nonpositive value, also from Inside.}
+\attrdef{OnEnter}{Function}{Event, triggered when the Player enters the Zone.}
+\attrdef{OnExit}{Function}{Event, triggered when the Player leaves the Zone.}
+\attrdef{OnProximity}{Function}{Event, triggered when the Player enters the \textit{Proximity} ring of a Zone. Note that this can be entered from Inside and from Distant, and if DistanceRange is set to a value which is not larger than ProximityRange, from NotInRange.}
 \attrdef{OriginalPoint}{ZonePoint}{The point which is supposed to be the origin of the Zone; it MUST NOT be on the perimiter. It is by definition inside the Zone.}
 \attrdef{ShowObjects}{String}{One of \textit{OnEnter}, \textit{OnProximity}, or \textit{Always}.  Defines when ZObjects which are inside the Zone are visible. When the Player is inside the Zone, they are always visible. When you are in the proximity range, they are only visible if this is set to Always or OnProximity. Otherwise they are only visible if this is set to Always.}
 \attrdef{State}{String}{State of the Player with respect to this Zone. One of
 	\textit{Inside}, \textit{Proximity}, \textit{Distant}, \textit{NotInRange}. The Player is inside the zone when Player.ObjectLocation is within the perimiter. Otherwise, if the distance to the perimiter is smaller than ProximityRange, the State is Proximity. If it is larger than ProximityRange, but smaller than DistanceRange, the State is Distant. Otherwise it is NotInRange. If not specified in the constructor, the initial value of State is NotInRange. If this is not the actual state at that time, callbacks are immediately called as if the Player has moved from NotInRange to their current location.}
-\attrdef{OnEnter}{Function}{Event, triggered when the Player enters the Zone.}
-\attrdef{OnExit}{Function}{Event, triggered when the Player leaves the Zone.}
-\attrdef{OnProximity}{Function}{Event, triggered when the Player enters the \textit{Proximity} ring of a Zone. Note that this can be entered from Inside and from Distant, and if DistanceRange is set to a value which is not larger than ProximityRange, from NotInRange.}
-\attrdef{OnDistant}{Function}{Event, triggered when the Player enters the \textit{Distant} ring of a Zone. Note that this can be entered from Proximity and from NotInRange, and if Proximity is set to a nonpositive value, also from Inside.}
 
 \subsubsection{ZTask (ZObject)}
 A task that the player can, and often should, do. There are three possible states: incomplete, done (correctly completed) and failed (complete, but incorrect).
@@ -236,14 +237,14 @@ always possible.
 \funcdef{ztimer:Start ()}{nil}{}{Starts the timer. If it was already running, do nothing. If ztimer.Remaining is negative, it is set to ztimer.Duration. If ztimer.Remaining is 0, a Tick event is immediately triggered. To avoid dead-locks, a Cartridge MUST NOT set Duration of an interval timer to 0.}
 \funcdef{ztimer:Stop ()}{nil}{}{Stops the timer. If it was not running, do nothing.}
 \funcdef{ztimer:Tick ()}{nil}{}{This function is called when the timer expires. It can be called from the lua code to fake an expired timer event. Countdown timers are stopped when this is called. Interval timers are restarted.}
-\attrdef{Type}{String}{Must be \textit{Countdown} or \textit{Interval}. Defines whether ztimer stops or restarts when it expires.}
 \attrdef{Duration}{Number}{Time in seconds. This is used when ztimer is started with a negative Remaining value. In particular, it is used as the restart value for Interval ZTimers.}
-\attrdef{Remaining}{Number}{Time in seconds before it expires. If the timer is running, this value will automatically count down.}
 \attrdef{OnStart}{Function}{Event which is triggered when Start is called. It is not triggered when an Interval ZTimer restarts.}
 \attrdef{OnStop}{Function}{Event which is triggered when Stop is called. It is not triggered when a ZTimer expires.}
 \attrdef{OnTick}{Function}{Event which is triggered when the timer expires. For Interval timers, this is called after restarting the timer, calling Stop from this event will work as expected.}
+\attrdef{Remaining}{Number}{Time in seconds before it expires. If the timer is running, this value will automatically count down. This is a read-only value.}
+\attrdef{Type}{String}{Must be \textit{Countdown} or \textit{Interval}. Defines whether ztimer stops or restarts when it expires.}
 
-\subsubsection{ZCommand (ZObject)}
+\subsubsection{ZCommand}
 Helper class for commands on ZItems and Zones. When these are displayed, it may
 be possible to run commands with them. There are two ways that this is
 possible: with a different object, or on its own.
@@ -258,20 +259,20 @@ examples.
 
 \begin{enumerate}
 	\item Command works on its own. A single button is displayed.
-	\item Command works with objects, but no candidates are available. A line of text explaining this is displayed.
+	\item Command works with objects, but no candidates are available. A line of text explaining this is displayed. A candidate is available if both its Visible and Active attributes are true.
 	\item Command works with objects, and one or more objects are available. A group of buttons is displayed; one for each object.
 \end{enumerate}
 
 When a command button is clicked by the Player, a callback is triggered on the Owner ZObject.
 
 \funcdef{ZCommand (Cartridge)}{ZCommand}{}{Constructor.}
-\attrdef{Text}{String}{The text that is shown to identify the command. For example, \textit{Talk}. This must be a short text.}
+\attrdef{CmdWith}{Boolean}{If true, the command needs an object to work on.}
 \attrdef{EmptyTargetListText}{String}{The text that is displayed for commands which need an object, when none is available.}
 \attrdef{Enabled}{Boolean}{If set the false, the command cannot be run. Normally, it will not be shown to the Player at all.}
-\attrdef{CmdWith}{Boolean}{If true, the command needs an object to work on.}
-\attrdef{WorksWithAll}{Boolean}{Only used if CmdWith is true. If this is true, every Visible ZItem, except the object that this command is for, will automatically be in the list of available targets.}
-\attrdef{WorksWithList}{Table of ZObjects}{Only used if CmdWith is true and WorksWithAll is false. This is a list of candidate objects for using the command with. It can only be used with them if they are Visible.}
 \attrdef{MakeReciprocal}{Boolean}{Only used if CmdWith is true and WorksWithAll is false. If true (the default), the command can also be selected when the Target ZObject is shown.}
+\attrdef{Text}{String}{The text that is shown to identify the command. For example, \textit{Talk}. This must be a short text.}
+\attrdef{WorksWithAll}{Boolean}{Only used if CmdWith is true. If this is true, every ZItem, except the object that this command is for, will automatically be in the list of available targets.}
+\attrdef{WorksWithList}{Table of ZObjects}{Only used if CmdWith is true and WorksWithAll is false. This is a list of candidate ZItems and Zones for using the command with.}
 
 \subsubsection{ZMedia (ZObject)}
 Class for objects which reference external data: a sound or an image.
@@ -295,7 +296,7 @@ of text from the Player.
 When requesting the input, the Engine is normally using the image in
 zinput.Media as an illustration, if there is one.
 \funcdef{ZInput (Cartridge)}{ZInput}{}{Constructor.}
-\attrdef{OnGetInput}{Function}{Event which is triggered when a multiple choice or text input is answered. It is passed a string argument: the text on the button that was pressed for a multiple choice input; the entered text for a text input.}
+\attrdef{OnGetInput}{Function}{Event which is triggered when a multiple choice or text input is answered. It is passed a string argument: the text on the button that was pressed for a multiple choice input; the entered text for a text input. If the input is cancelled, this event is triggered with nil as its argument.}
 \attrdef{Text}{String}{Text which is displayed to request the input.}
 
 \subsection{Functions}
@@ -307,25 +308,25 @@ second one is called before the previous one was answered, it will replace it.
 The previous message's callback function will be called with a nil argument to
 signify that this happened.
 
-\funcdef{Dialog (table)}{nil}{table: a list of messages.}{Show a list of messages to the player, in sequence. The elements of the table are the same as for the MessageBox function, except that they cannot have a Callback or Buttons (the Engine would normally give them an implicit Ok button to show the next message).}
-\funcdef{MessageBox (table)}{nil}{table: the message to display.}{The table, like a ZInput, contains a Text to display, and an optional Media containing an image. In addition, it contains Buttons, which is a table of strings, which are printed on buttons, and a Callback function, which is called when a button is pressed. Callback is passed a string 'Button1' if the first button is pressed, 'Button2' for the second, etc.}
-\funcdef{GetInput (zinput)}{nil}{The ZInput to request.}{Request a previously defined input from the Player.}
-\funcdef{PlayAudio (sound)}{nil}{The ZMedia to play.}{Play sound (which must be a sound media file). Any previously playing file MAY be stopped.}
-\funcdef{ShowStatusText (text)}{nil}{message string}{Let the Player know about something in a non-invasive way. Normally, this happens by showing the text in the status bar of the Engine.}
-\funcdef{SaveClose ()}{nil}{}{Save the game and quit the Engine.}
-\funcdef{DriveTo (zonepoint)}{nil}{target ZonePoint}{Leave the Engine interface temporarily, and let the device navigate the Player to zonepoint.}
-\funcdef{StopSound ()}{nil}{}{Abort all currently playing sounds.}
 \funcdef{Alert ()}{nil}{}{Give a signal to the Player, such as a beep or a flash.}
-\funcdef{ShowScreen (which, [item])}{nil}{which: One of the SCREEN-constants.\\item: a ZObject}{Try to focus the Player's attention on the given part of the interface. If which is DETAILSCREEN, item MUST be used to specify of which object the details should be shown. For other values of which, item MUST be ignored and should be omitted.}
+\funcdef{Dialog (table)}{nil}{table: a list of messages.}{Show a list of messages to the player, in sequence. The elements of the Table are the same as the argument of the MessageBox function, except that they cannot have a Callback or Buttons (the Engine would normally give them an implicit Ok button to show the next message).}
+\funcdef{DriveTo (zonepoint)}{nil}{target ZonePoint}{Leave the Engine interface temporarily, and let the device navigate the Player to zonepoint.}
+\funcdef{GetInput (zinput)}{nil}{The ZInput to request.}{Request a previously defined input from the Player.}
 \funcdef{LogMessage (message)}{nil}{Message to log}{Write a message to a log file. The Engine MAY display this file to the Player as well. The log format is described below.}
+\funcdef{MessageBox (table)}{nil}{table: the message to display.}{The Table, like a ZInput, contains a Text to display, and an optional Media containing an image. In addition, it contains Buttons, which is a Table of strings, which are printed on buttons, and a Callback function, which is called when a button is pressed. Callback is passed a string 'Button1' if the first button is pressed, 'Button2' for the second, etc.}
+\funcdef{PlayAudio (sound)}{nil}{The ZMedia to play.}{Play sound (which must be a sound media file). Any previously playing file MAY be stopped.}
+\funcdef{SaveClose ()}{nil}{}{Save the game and quit the Engine.}
+\funcdef{ShowScreen (which, [item])}{nil}{which: One of the SCREEN-constants.\\item: a ZObject}{Try to focus the Player's attention on the given part of the interface. If which is DETAILSCREEN, item MUST be used to specify of which object the details should be shown. For other values of which, item MUST be ignored and should be omitted.}
+\funcdef{ShowStatusText (text)}{nil}{message string}{Let the Player know about something in a non-invasive way. Normally, this happens by showing the text in the status bar of the Engine.}
+\funcdef{StopSound ()}{nil}{}{Abort all currently playing sounds.}
 
 \subsubsection{Spherical arithmetics}
 These functions SHOULD use spherical arithmetics to perform their task. At the very least, they MUST work properly for zones crossing any coordinate boundary.
 \funcdef{IsPointInZone (point, zone)}{Boolean}{point: The ZonePoint to test.\\zone: The Zone te test.}{Return true if point and zone.OriginalPoint are in the same segment of the sphere.}
+\funcdef{TranslatePoint (point, distance, bearing)}{ZonePoint}{point: point to translate.\\distance, bearing: vector to translate over.}{Return the ZonePoint where you end up when moving from point over vector.}
+\funcdef{VertorToPoint (point1, point2)}{Distance, number}{point1, point2: ZonePoints}{Return the vector from point1 to point2.}
 \funcdef{VectorToSegment (point, s1, s2)}{Distance, number}{point: the ZonePoint to test.\\s1, s2: the ZonePoint endpoints of the segment to test. The segment is the shortest line over the sphere from s1 to s2. s1 and s2 MUST NOT be exactly opposite each other.}{Determine the closest point on the segment from point; return the vector from point to this point.}
 \funcdef{VectorToZone (point, zone)}{Distance, number}{point: the ZonePoint to test.\\zone: the Zone to test.}{Return the minimum of the results of VectorToSegment for each of the segments of the perimiter of the Zone.}
-\funcdef{VertorToPoint (point1, point2)}{Distance, number}{point1, point2: ZonePoints}{Return the vector from point1 to point2.}
-\funcdef{TranslatePoint (point, distance, bearing)}{ZonePoint}{point: point to translate.\\distance, bearing: vector to translate over.}{Return the ZonePoint where you end up when moving from point over vector.}
 
 \subsubsection{Other}
 \funcdef{NoCaseEquals (s1, s2)}{Boolean}{s1, s2: strings to compare.}{Return the case-insensitive comparison of s1 and s2.}
@@ -426,7 +427,8 @@ be used in any other place.
 
 Filenames specified by File keys are relative to the Image or Sound
 subdirectory of the Cartridge source, for Image and Sound media files
-respectively.
+respectively. If they use subdirectories, they MUST use the forward slash
+``\verb-/-'' as a directory separator.
 
 Media objects or files which do not need to specify anything, do not need to be
 defined in the gwi-file. A media file which is in the Cartridge and which is
@@ -437,6 +439,9 @@ filename as a value. If there are several files which would define the same
 media object, they MUST be treated as files all providing the same object. (But
 if one is they are different types, one Sound and one Image, they MUST be
 providing separate objects.)
+
+Media files which are placed in subdirectories of Image or Sound MUST be
+referenced using an explicit File field.
 
 If a media object is defined, but no sources, then any files of a fitting type
 with the object's name as their basename are used as candidates to provide it.
