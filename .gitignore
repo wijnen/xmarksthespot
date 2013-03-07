@@ -1,5 +1,5 @@
 lua.py
-args.py
+wherigo.py
 *.pyc
 *.gwc
 format/*.aux

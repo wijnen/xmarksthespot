@@ -154,7 +154,7 @@ as part of a subclass.
 \attrdef{CurrentDistance}{Distance}{Distance from the Player to this object. 0 if the Player contains this object.}
 \attrdef{Description}{String}{Description of this ZObject. For objects which can appear in the UI, this is shown as their details.}
 \attrdef{Icon}{ZMedia}{Image which represents this ZObject. This can be used as an icon when the object is shown in a list.}
-\attrdef{Inventory}{Table of ZObject}{A list of all objects which have this ZObject set as their Container. This attribute is read-only; it is updated automatically when using MoveTo.}
+\attrdef{Inventory}{Table of ZObject}{A list of all objects which have this ZObject set as their Container. This attribute is read-only; it is updated automatically when using MoveTo. For Zones, the Player object is automatically added or removed when the player enters or leaves the zone, respectively. This happens before OnEnter or OnExit are triggered.}
 \attrdef{Media}{ZMedia}{Image which represents this ZObject. This can be used when a larger image is required, usually for the object's details.}
 \attrdef{Name}{String}{Name of this object. Used when presenting this object in the UI.}
 \attrdef{ObjectLocation}{ZonePoint}{Current location of this ZObject.}
