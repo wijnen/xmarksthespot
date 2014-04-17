@@ -170,14 +170,23 @@ class Converter:
 				return ret + orig
 			ret += orig[:pos.end ()]
 			orig = orig[pos.end ():]
+			#print repr (ret[-10:]), '...', repr (orig[:10]), '/', pos.group (0)
 			if pos.group (0) == "'":
-				end = end_re1.search (orig).end () - 1
+				end = end_re1.search (orig)
+				if end is None:
+					sys.stderr.write ('Error: unterminated string.\n')
+					sys.exit (1)
+				end = end.end () - 1
 			elif pos.group (0) == '"':
-				end = end_re2.search (orig).end () - 1
+				end = end_re2.search (orig)
+				if end is None:
+					sys.stderr.write ('Error: unterminated string.\n')
+					sys.exit (1)
+				end = end.end () - 1
 			else:
 				end = orig.find (']' + pos.group (1) + ']')
 				if end < 0:
-					sys.stderr.write ('Unmatched long open bracket.\n')
+					sys.stderr.write ('Error: unmatched long open bracket.\n')
 					sys.exit (1)
 			ret += self.mangle (orig[:end + 1])
 			orig = orig[end + 1:]
