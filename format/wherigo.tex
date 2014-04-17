@@ -196,7 +196,7 @@ game.
 \attrdef{Icon}{ZMedia}{Icon from the metadata.}
 \attrdef{LastPlayedDate}{String}{LastPlayedDate from the metadata.}
 \attrdef{License}{String}{License from the metadata. Only the short part; the Long Value is not included.}
-\attrdef{Media}{ZMedia}{Media from the metadata.}
+\attrdef{Media}{ZMedia}{Poster from the metadata.}
 \attrdef{OnEnd}{Function}{Event, called when the game ends.}
 \attrdef{OnRestore}{Function}{Event, called immediately after loading a saved game. See more on saving below.}
 \attrdef{OnStart}{Function}{Event, called when the game is started.}
@@ -433,7 +433,7 @@ expression above).
 \defkey{Activity}{MUST be one of a defined set of values. Currently allowed values are TourGuide, Puzzle, Fiction, and Geocache.}{-}{-}{}
 \defkey{StartingLocation}{Three floating point numbers, setting the starting location of the Cartridge. The first two numbers define the latitude and longitude, both in degrees. The third number defines the altitude, in meters.}{Description of the starting location.}{-}{}
 \defkey{BuilderVersion}{Version of the Builder.}{-}{-}{This key is optional. A Builder MUST include this key. The version has the same requirements as Cartridge Version, plus the requirement that the first group of the version MUST be the Builder's name.}
-\defkey{Media}{Name of the title image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
+\defkey{Poster}{Name of the title image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
 \defkey{Icon}{Name of the icon image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
 \defkey{CreateDate}{Date that the cartridge was originally created.}{-}{-}{}
 \defkey{UpdateDate}{Date that the cartridge was last updated.}{-}{-}{}

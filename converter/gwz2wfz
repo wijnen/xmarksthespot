@@ -45,7 +45,7 @@ function Wherigo.ZMedia(...)
 end
 -- Generated wrapper to use old newline style.
 function Wherigo.deconvert_nl(str)
-	return str:gsub('%s*<BR>%s*', '\n'):gsub('%s*&nbsp;%s*', '   '):gsub('&gt;', '>'):gsub('&lt;', '<'):gsub('&amp;', '&')
+	return str:gsub('%%s*<BR>%%s*', '\n'):gsub('%%s*&nbsp;%%s*', '   '):gsub('&gt;', '>'):gsub('&lt;', '<'):gsub('&amp;', '&')
 end
 -- TODO: The above function should also be used in Dialog and when setting the Description of a ZObject.
 Wherigo.orig_MessageBox = Wherigo.MessageBox
@@ -141,15 +141,15 @@ class Converter:
 		self.wfi += self.get ('Version')
 		self.wfi += self.get ('Author')
 		self.wfi += self.get ('Company')
-		self.wfi += 'Copyright: %s\n' % mangle_string (self.copyright)
-		self.wfi += 'License: %s\n' % mangle_string (self.license)
+		self.wfi += 'Copyright: %s\n' % self.mangle_string (self.copyright)
+		self.wfi += 'License: %s\n' % self.mangle_string (self.license)
 
 		self.wfi += self.get ('CreateDate')
 		self.wfi += self.get ('UpdateDate')
 
 		self.wfi += self.get ('Activity', default = False)
-		self.wfi += self.get_media ('Media')
-		self.wfi += self.get_media ('Icon')
+		self.media = self.get_media ('Media')
+		self.icon = self.get_media ('Icon')
 		self.wfi += self.get ('StartingLocation', 'StartingLocationDescription', value = '%f %f %f' % (self.cart.StartingLocation.latitude, self.cart.StartingLocation.longitude, self.cart.StartingLocation.altitude ()), default = False)
 
 		self.wfi += self.get ('TargetDevice')
@@ -158,7 +158,7 @@ class Converter:
 	def mangle_string (self, orig):
 		ret = ''
 		short_re = re.compile (r'''('|")((?:[^\\]|\\.)*?)\1''')
-		long_re = re.compile (r'''\[(=*)\[(.*?)\]\1\]''')
+		long_re = re.compile (r'''(--)?\[(=*)\[(.*?)\]\2\]''')
 		while True:
 			s = short_re.search (orig)
 			l = long_re.search (orig)
@@ -166,8 +166,11 @@ class Converter:
 				return ret + orig
 			if l is not None and (s is None or l.start () < s.start ()):
 				ret += orig[:l.start ()]
-				string = l.group (2)
 				orig = orig[l.end ():]
+				if l.group (1):
+					ret += l.group (0)
+					continue
+				string = l.group (3)
 			else:
 				ret += orig[:s.start ()]
 				string = s.group (2)
@@ -180,7 +183,7 @@ class Converter:
 				if self.gwc:
 					ret += name + ': ' + getattr (self.cart, name) + '\n'
 				else:
-					ret += name + ': ' + self.mangle_string (getattr (self.cart, name)) + '\n'
+					ret += name + ': ' + self.unmangle (getattr (self.cart, name)) + '\n'
 			elif default is False:
 				sys.stderr.write ("Cartridge didn't define required attribute %s\n" % name)
 				sys.exit (1)
@@ -192,8 +195,8 @@ class Converter:
 			if self.gwc:
 				val = getattr (self.cart, longname)
 			else:
-				val = self.mangle_string (getattr (self.cart, longname))
-			if val != '':
+				val = self.unmangle (getattr (self.cart, longname))
+			if val.strip () != '':
 				ret += '\t' + '\n\t'.join (getattr (self.cart, longname).split ('\n')) + '\n'
 		return ret
 	def get_media (self, name):
@@ -201,8 +204,8 @@ class Converter:
 			return ''
 		obj = getattr (self.cart, name)
 		if obj is None:
-			return ''
-		return name + ': ' + ZMedia._list[obj._index][0] + '\n'
+			return None
+		return ZMedia._list[obj._index]
 	def mangle (self, string):
 		# Substitutions (in this order):
 		# "&" with "&amp;"
@@ -220,6 +223,10 @@ class Converter:
 		string = '\n'.join (re.split ('\n\r|\r\n', string))
 		string = '<BR>\n'.join (re.split ('\n|\r', string))
 		return self.as_string (string)
+	def unmangle (self, string):
+		string = '\n'.join (re.split (r'\s*<BR>\s*', string))
+		string = '   '.join (re.split (r'\s*&nbsp;\s*', string))
+		return string.replace ('&gt;', '>').replace ('&lt;', '<').replace ('&amp;', '&')
 	def as_string (self, string):
 		level = 0
 		while True:
@@ -227,31 +234,42 @@ class Converter:
 				return '([' + '=' * level + '[' + string + ']' + '=' * level + '])'
 			level += 1
 	def as_id (self, string):
-		return '_'.join (re.split ('[^a-zA-Z0-9]', string))
+		ret = '_'.join (re.split ('[^a-zA-Z0-9]', string))
+		if ret == '' or '0' <= ret[0] <= '9':
+			ret = '_' + ret
+		return ret
+	def make_name (self, name):
+		name = self.as_id (os.path.splitext (name)[0])
+		n = name
+		i = 0
+		while n in self.names:
+			n = '%s%d' % (name, i)
+			i += 1
+		self.names.add (n)
+		return n
 	def write_target (self, file):
-		names = set ()
+		self.names = set ()
 		with zipfile.ZipFile (file, 'w') as wfz:
 			for m in ZMedia._list:
-				n = None
+				m._name = None
 				if not hasattr (m, 'Resources') or len (m.Resources.list ()) == 0:
 					sys.stderr.write ('Warning: no files specified for Media %d\n' % m._index)
 					continue
 				for f in m.Resources.list ():
-					if n is None:
-						name = self.as_id (os.path.splitext (os.path.basename (f['Filename']))[0])
-						i = 0
-						n = name
-						while n in names:
-							n = '%s%d' % (name, i)
-							i += 1
-						m._name = n
+					if m._name is None:
+						m._name = self.make_name (os.path.basename (f['Filename']))
 						m._filename = f['Filename']
-						names.add (n)
-						self.wfi += 'Media: ' + n + '\n'
+						self.wfi += 'Media: ' + m._name + '\n'
 					self.wfi += 'File: ' + f['Filename'] + '\n'
 					if 'Directives' in f:
 						for d in f['Directives'].list ():
 							self.wfi += '\t%s\n' % d
+				if m._name is None:
+					m._name = self.make_name ('unknown')
+			if self.media:
+				self.wfi += 'Poster: ' + self.media._name + '\n'
+			if self.icon:
+				self.wfi += 'Icon: ' + self.icon._name + '\n'
 			media = ',\n'.join (['Wherigo.Media.%s' % m._name for m in ZMedia._list])
 			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, self.as_string (self.lua)))
 			wfz.writestr (os.path.join (self.name, '_cartridge.wfi'), self.wfi)
@@ -293,7 +311,7 @@ def main ():
 	a.add_argument ('--wfz', help = 'output cartridge filename (use - for standard output; default is the same as input, with extension wfz)', default = None)
 	a.add_argument ('--force', help = 'overwrite wfz file if it exists', action = 'store_true')
 	a.add_argument ('--gwc', help = 'force input to be treated as a gwc file', action = 'store_const', const = True, default = None)
-	a.add_argument ('--gwz', help = 'force input to be treated as a gwz file', action = 'store_const', const = False, dest = gwc, default = None)
+	a.add_argument ('--gwz', help = 'force input to be treated as a gwz file', action = 'store_const', const = False, dest = 'gwc', default = None)
 	args = a.parse_args ()
 	if args.name is None:
 		name = os.path.splitext (os.path.basename (args.gwz_or_gwc))[0]
@@ -303,7 +321,7 @@ def main ():
 		f = sys.stdin
 		gwc = False
 		if args.wfz is None or args.wfz == '-':
-			of = sys.stdout
+			of = lambda: sys.stdout
 			ofname = None
 		else:
 			ofname = args.wfz
@@ -324,8 +342,9 @@ def main ():
 				sys.stderr.write ('Overwriting at your request.\n')
 			else:
 				sys.exit (1)
-		of = open (ofname, 'wb')
-	Converter (name, f, args.gwc if args.gwc is not None else gwc, args.copyright, args.license).write_target (of)
+		of = lambda: open (ofname, 'wb')	# Use lambda function to delay creating the file.
+	c = Converter (name, f, args.gwc if args.gwc is not None else gwc, args.copyright, args.license)
+	c.write_target (of ())
 
 if __name__ == '__main__':
 	main ()
