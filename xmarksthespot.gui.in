@@ -1,0 +1,57 @@
+gtk
+	Setting name=taskcolor value=#0c0
+	Setting name=historycolor value=#888
+	Setting name=inventorycolor value=#c80
+	Setting name=locationcolor value=#00c
+	Setting name=charactercolor value=#c00
+	Setting name=objectcolor value=#880
+	Setting name=messagecolor value=#000
+	Setting name=logcolor value=#808
+	Setting name=positioncolor value=#000
+	Setting name=gridcolor value=#ccc
+	Setting name=startcolor value=#00f
+	Setting name=customcolor value=#f00
+	FileChooserDialog title=':Choose the file to open' action=:open response=file_open_response show=show_opendialog filename=open_filename
+	FileChooserDialog title=':Choose the file to save' action=:save response=file_save_response show=show_savedialog filename=save_filename
+	AboutDialog setup=':|name X marks the spot|copyright Copyright 2013 Bas Wijnen &lt;wijnen@debian.org&gt;|license GNU AGPL version 3 or later|authors Bas Wijnen &lt;wijnen@debian.org&gt;|version 0.5|comments Wherigo cartridge player designed for large screens'
+
+	Window title=":X Marks the Spot"
+		VBox
+			MenuBar expand=:False
+				Menu title=File
+					MenuItem title=New action=file_new
+					MenuItem title=Open action=file_open
+					MenuItem title=Save action=file_save
+					MenuItem title=Quit action=file_quit
+				Menu title=Help
+					MenuItem title=About action=help_about
+			VPaned
+				VBox show=show_debug:False
+					HBox expand=:False
+						Button clicked=skip_one
+							'Skip until next timeout
+						Button clicked=skip_more
+							'Skip until next dialog
+					Timers update=update_timer skip=skip_time
+				HPaned
+					Book button=command save_page=save_page
+						Locations set_page=focus_location select=select_location update=update_location
+						Inventory set_page=focus_inventory select=select_inventory update=update_inventory
+						Environment set_page=focus_environment select=select_environment update=update_environment
+						Tasks set_page=focus_tasks select=select_tasks update=update_task
+						History add=history_add
+						Log
+						Message show=message_show set=message_set set_page=focus_message
+					External id=map
+			HBox expand=:False
+				Label value=:Position: expand=:False
+				Label value=lat_label expand=:False
+				VSeparator expand=:False
+				Label value=lon_label expand=:False
+				VSeparator expand=:False
+				Label value=alt_label expand=:False
+				VSeparator
+				Label value=inside_label
+				CheckButton value=position_locked
+					'Lock position
+			Statusbar text=statusbar expand=:False

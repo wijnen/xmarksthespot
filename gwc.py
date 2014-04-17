@@ -83,7 +83,7 @@ class cartridge:
 			self._read_gwc (file)
 		env = {}
 		for i in config:
-			if i.startswith ('env-'):
+			if i.startswith ('env_'):
 				env[i[4:]] = config[i]
 		env['Downloaded'] = int (env['Downloaded'])
 		if not env['CartFilename']:

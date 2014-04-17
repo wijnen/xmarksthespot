@@ -27,17 +27,26 @@ def load_config ():
 		os.makedirs (d)
 	if not os.path.exists (f):
 		handle = open (f, 'w')
+		try:
+			name = os.getlogin ().capitalize ()
+		except:
+			# We're on Windows, or something else is wrong.
+			# Don't bother, just use a default.
+			name = 'Monty Python'
 		handle.write ('''\
 # Configuration for xmarksthespot.
 # Empty lines and lines starting with # are ignored.
 # The first words is the configuration option key. The rest of the line is the value.
+
+# Default settings when building a cartridge.
+# These are also used when playing from non-gwc source.
 Id			0
 URL			about:blank
 Device			PocketPC
-PlayerName		Monty Python
+PlayerName		%s
 CompletionCode		completion-code
 
-# Env settings.
+# Env settings.  These are accessible to lua.
 env-Platform		xmarksthespot
 env-CartFolder		/whatever
 env-SyncFolder		/whatever
@@ -46,27 +55,10 @@ env-PathSep		/
 env-DeviceID		Python
 env-Version		2.11-compatible
 env-Downloaded		0
+# If the following are empty, they are filled automatically.
 env-CartFilename	
 env-Device		
-
-# Color definitions.
-# Stuff on the map.
-	# zonescolor is also used in the zones tab.
-zonescolor		#00f
-characterscolor		#f00
-objectscolor		#880
-positioncolor		#000
-gridcolor		#ccc
-
-# Stuff in the tabs.
-environmentcolor	#f00
-inventorycolor		#880
-taskcolor		#000
-messagecolor		#000
-historycolor		#888
-logcolor		#080
-timercolor		#f0f
-''')
+''' % name)
 		handle.close ()
 	
 	ret = {}
