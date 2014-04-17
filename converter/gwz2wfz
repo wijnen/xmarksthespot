@@ -67,8 +67,8 @@ end
 return assert(loadstring(%s))()
 '''
 
-lua_magic = '\x1bLua'	# Magic number to detect a compiled lua file.
-gwc_magic = '\x02\x0aCART\x00'	# Magic number to detect a gwc file.
+lua_magic = b'\x1bLua'	# Magic number to detect a compiled lua file.
+gwc_magic = b'\x02\x0aCART\x00'	# Magic number to detect a gwc file.
 
 class ZMedia (wherigo.ZObject):
 	_list = []
@@ -90,7 +90,7 @@ class Converter:
 			self.file = file
 			magic = file.read (len (gwc_magic))
 			if magic != gwc_magic:
-				sys.stderr.write ('This is not a gwc file')
+				sys.stderr.write ('This is not a gwc file.\n')
 				sys.exit (1)
 			num = self.read_short (file)
 			self.file_id = [None] * num
@@ -150,7 +150,11 @@ class Converter:
 		self.wfi += self.get ('Activity', default = False)
 		self.media = self.get_media ('Media')
 		self.icon = self.get_media ('Icon')
-		self.wfi += self.get ('StartingLocation', 'StartingLocationDescription', value = '%f %f %f' % (self.cart.StartingLocation.latitude, self.cart.StartingLocation.longitude, self.cart.StartingLocation.altitude ()), default = False)
+		if self.cart.StartingLocation == wherigo.INVALID_ZONEPOINT:
+			val = 'None'
+		else:
+			val = '%f %f %f' % (self.cart.StartingLocation.latitude, self.cart.StartingLocation.longitude, self.cart.StartingLocation.altitude ())
+		self.wfi += self.get ('StartingLocation', 'StartingLocationDescription', value = val, default = False)
 
 		self.wfi += self.get ('TargetDevice')
 		self.wfi += self.get ('TargetDeviceVersion')
@@ -165,6 +169,7 @@ class Converter:
 			if s is None and l is None:
 				return ret + orig
 			if l is not None and (s is None or l.start () < s.start ()):
+				quote = l.group (2)
 				ret += orig[:l.start ()]
 				orig = orig[l.end ():]
 				if l.group (1):
@@ -172,10 +177,11 @@ class Converter:
 					continue
 				string = l.group (3)
 			else:
+				quote = s.group (1)
 				ret += orig[:s.start ()]
 				string = s.group (2)
 				orig = orig[s.end ():]
-			ret += self.mangle (string)
+			ret += self.mangle (string, quote)
 	def get (self, name, longname = None, value = None, default = None):
 		ret = ''
 		if value is None:
@@ -206,7 +212,7 @@ class Converter:
 		if obj is None:
 			return None
 		return ZMedia._list[obj._index]
-	def mangle (self, string):
+	def mangle (self, string, quote):
 		# Substitutions (in this order):
 		# "&" with "&amp;"
 		# "<" with "&lt;"
@@ -222,12 +228,16 @@ class Converter:
 		string = '&nbsp;'.join (re.split ('  +', string))
 		string = '\n'.join (re.split ('\n\r|\r\n', string))
 		string = '<BR>\n'.join (re.split ('\n|\r', string))
-		return self.as_string (string)
+		return self.as_string (string, quote)
 	def unmangle (self, string):
 		string = '\n'.join (re.split (r'\s*<BR>\s*', string))
 		string = '   '.join (re.split (r'\s*&nbsp;\s*', string))
 		return string.replace ('&gt;', '>').replace ('&lt;', '<').replace ('&amp;', '&')
-	def as_string (self, string):
+	def as_string (self, string, quote):
+		if quote in ('"', "'"):
+			return quote + string + quote
+		if quote is not None:
+			return '([' + quote + '[' + string + ']' + quote + '])'
 		level = 0
 		while True:
 			if (']' + '=' * level + ']') not in string:
@@ -271,7 +281,7 @@ class Converter:
 			if self.icon:
 				self.wfi += 'Icon: ' + self.icon._name + '\n'
 			media = ',\n'.join (['Wherigo.Media.%s' % m._name for m in ZMedia._list])
-			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, self.as_string (self.lua)))
+			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, self.as_string (self.lua, None)))
 			wfz.writestr (os.path.join (self.name, '_cartridge.wfi'), self.wfi)
 			if self.gwc:
 				files = zip (self.file_id, self.offset)
