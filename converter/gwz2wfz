@@ -161,27 +161,26 @@ class Converter:
 		self.wfi += self.get ('BuilderVersion')
 	def mangle_string (self, orig):
 		ret = ''
-		short_re = re.compile (r'''('|")((?:[^\\]|\\.)*?)\1''')
-		long_re = re.compile (r'''(--)?\[(=*)\[(.*?)\]\2\]''')
+		start_re = re.compile (r'''"|'|\[(=*)\[''')
+		end_re1 = re.compile (r"""(?:[^\\']|\\.)*'""")
+		end_re2 = re.compile (r'''(?:[^\\"]|\\.)*"''')
 		while True:
-			s = short_re.search (orig)
-			l = long_re.search (orig)
-			if s is None and l is None:
+			pos = start_re.search (orig)
+			if pos is None:
 				return ret + orig
-			if l is not None and (s is None or l.start () < s.start ()):
-				quote = l.group (2)
-				ret += orig[:l.start ()]
-				orig = orig[l.end ():]
-				if l.group (1):
-					ret += l.group (0)
-					continue
-				string = l.group (3)
+			ret += orig[:pos.end ()]
+			orig = orig[pos.end ():]
+			if pos.group (0) == "'":
+				end = end_re1.search (orig).end () - 1
+			elif pos.group (0) == '"':
+				end = end_re2.search (orig).end () - 1
 			else:
-				quote = s.group (1)
-				ret += orig[:s.start ()]
-				string = s.group (2)
-				orig = orig[s.end ():]
-			ret += self.mangle (string, quote)
+				end = orig.find (']' + pos.group (1) + ']')
+				if end < 0:
+					sys.stderr.write ('Unmatched long open bracket.\n')
+					sys.exit (1)
+			ret += self.mangle (orig[:end + 1])
+			orig = orig[end + 1:]
 	def get (self, name, longname = None, value = None, default = None):
 		ret = ''
 		if value is None:
@@ -212,7 +211,7 @@ class Converter:
 		if obj is None:
 			return None
 		return ZMedia._list[obj._index]
-	def mangle (self, string, quote):
+	def mangle (self, string):
 		# Substitutions (in this order):
 		# "&" with "&amp;"
 		# "<" with "&lt;"
@@ -228,16 +227,12 @@ class Converter:
 		string = '&nbsp;'.join (re.split ('  +', string))
 		string = '\n'.join (re.split ('\n\r|\r\n', string))
 		string = '<BR>\n'.join (re.split ('\n|\r', string))
-		return self.as_string (string, quote)
+		return string
 	def unmangle (self, string):
 		string = '\n'.join (re.split (r'\s*<BR>\s*', string))
 		string = '   '.join (re.split (r'\s*&nbsp;\s*', string))
 		return string.replace ('&gt;', '>').replace ('&lt;', '<').replace ('&amp;', '&')
-	def as_string (self, string, quote):
-		if quote in ('"', "'"):
-			return quote + string + quote
-		if quote is not None:
-			return '([' + quote + '[' + string + ']' + quote + '])'
+	def as_string (self, string):
 		level = 0
 		while True:
 			if (']' + '=' * level + ']') not in string:
@@ -281,7 +276,7 @@ class Converter:
 			if self.icon:
 				self.wfi += 'Icon: ' + self.icon._name + '\n'
 			media = ',\n'.join (['Wherigo.Media.%s' % m._name for m in ZMedia._list])
-			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, self.as_string (self.lua, None)))
+			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, self.as_string (self.lua)))
 			wfz.writestr (os.path.join (self.name, '_cartridge.wfi'), self.wfi)
 			if self.gwc:
 				files = zip (self.file_id, self.offset)
