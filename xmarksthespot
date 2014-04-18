@@ -473,16 +473,6 @@ def open_cartridge (cartfile): # {{{
 		config['env_Device'] = config['Device']
 	# }}}
 	settings.gameobject = wherigo._load (cartfile, cbs, config)
-	# Replace image data with their pixbuf. {{{
-	for i in settings.gameobject._getmedia ():
-		if not hasattr (i, '_image'):
-			# Sound media file.
-			continue
-		px = gtk.gdk.PixbufLoader ()
-		px.write (i._image)
-		px.close ()
-		i._image = px.get_pixbuf ()
-	# }}}
 	# Set up start message. {{{
 	text = 'You are about to play "%s"' % settings.gameobject.Name
 	if settings.gameobject.Description.strip () != '':

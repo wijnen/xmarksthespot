@@ -37,15 +37,15 @@ import wherigo
 # Do this before displaying in Dialog, ShowStatusText, LogMessage, MessageBox and when creating any ZObject description.
 
 template = '''\
-require Wherigo
+require 'Wherigo'
 -- Generated code to make media usable by old-style code.
 Wherigo.ZMedia_list = {%s}
 function Wherigo.ZMedia(...)
-	return Wherigo.ZMedia_list:remove(1)
+	return table.remove (Wherigo.ZMedia_list, 1)
 end
 -- Generated wrapper to use old newline style.
 function Wherigo.deconvert_nl(str)
-	return str:gsub('%%s*<BR>%%s*', '\n'):gsub('%%s*&nbsp;%%s*', '   '):gsub('&gt;', '>'):gsub('&lt;', '<'):gsub('&amp;', '&')
+	return str:gsub('%%s*<BR>%%s*', '\\n'):gsub('%%s*&nbsp;%%s*', '   '):gsub('&gt;', '>'):gsub('&lt;', '<'):gsub('&amp;', '&')
 end
 -- TODO: The above function should also be used in Dialog and when setting the Description of a ZObject.
 Wherigo.orig_MessageBox = Wherigo.MessageBox
@@ -58,7 +58,7 @@ end
 function Wherigo.LogMessage(text, level)
 	if level == nil then
 		level = text.Level
-		if text.Text != nil then
+		if text.Text ~= nil then
 			text = text.Text
 		end
 	end
