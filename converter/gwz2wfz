@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # gwz2wfz - convert old style gwz and gwc cartridges into wfz.
 # Copyright 2012 Bas Wijnen <wijnen@debian.org>
@@ -117,6 +117,9 @@ class Converter:
 			self.lua = orig_lua
 		else:
 			self.lua = self.mangle_string (orig_lua)
+			if self.lua.startswith (b'\xef\xbb\xbf'):
+				sys.stderr.write ('Warning: lua source started with BOM.\n')
+				self.lua = self.lua[3:]
 		self.parser = lua.lua ()
 		# Create this object; it is required for old style cartridges, but not for the new ones that wherigo.py is meant to be used with.
 		wherigo.ZMedia = ZMedia
@@ -141,8 +144,8 @@ class Converter:
 		self.wfi += self.get ('Version')
 		self.wfi += self.get ('Author')
 		self.wfi += self.get ('Company')
-		self.wfi += 'Copyright: %s\n' % self.mangle_string (self.copyright)
-		self.wfi += 'License: %s\n' % self.mangle_string (self.license)
+		self.wfi += 'Copyright: %s\n' % self.copyright
+		self.wfi += 'License: %s\n' % self.license
 
 		self.wfi += self.get ('CreateDate')
 		self.wfi += self.get ('UpdateDate')
@@ -160,34 +163,35 @@ class Converter:
 		self.wfi += self.get ('TargetDeviceVersion')
 		self.wfi += self.get ('BuilderVersion')
 	def mangle_string (self, orig):
-		ret = ''
-		start_re = re.compile (r'''"|'|\[(=*)\[''')
-		end_re1 = re.compile (r"""(?:[^\\']|\\.)*'""")
-		end_re2 = re.compile (r'''(?:[^\\"]|\\.)*"''')
+		ret = b''
+		start_re = re.compile (b'''"|'|\[(=*)\[''')
+		end_re1 = re.compile (b"""(?:[^\\']|\\.)*'""")
+		end_re2 = re.compile (b'''(?:[^\\"]|\\.)*"''')
 		while True:
 			pos = start_re.search (orig)
 			if pos is None:
 				return ret + orig
 			ret += orig[:pos.end ()]
 			orig = orig[pos.end ():]
-			#print repr (ret[-10:]), '...', repr (orig[:10]), '/', pos.group (0)
-			if pos.group (0) == "'":
+			#print (repr (ret[-10:]), '...', repr (orig[:10]), '/', pos.group (0))
+			if pos.group (0) == b"'":
 				end = end_re1.search (orig)
 				if end is None:
 					sys.stderr.write ('Error: unterminated string.\n')
 					sys.exit (1)
 				end = end.end () - 1
-			elif pos.group (0) == '"':
+			elif pos.group (0) == b'"':
 				end = end_re2.search (orig)
 				if end is None:
 					sys.stderr.write ('Error: unterminated string.\n')
 					sys.exit (1)
 				end = end.end () - 1
 			else:
-				end = orig.find (']' + pos.group (1) + ']')
+				end = orig.find (b']' + pos.group (1) + b']')
 				if end < 0:
 					sys.stderr.write ('Error: unmatched long open bracket.\n')
 					sys.exit (1)
+			#print (orig[:end])
 			ret += self.mangle (orig[:end + 1])
 			orig = orig[end + 1:]
 	def get (self, name, longname = None, value = None, default = None):
@@ -229,13 +233,13 @@ class Converter:
 		# two and more spaces with "&nbsp;"
 		# "\r\n" or "\n\r" with "\n"
 		# "\r" or "\n" with "<BR>\n"
-		string = string.replace ('&', '&amp;')
-		string = string.replace ('<', '&lt;')
-		string = string.replace ('>', '&gt;')
-		string = string.replace ('\t', '   ')
-		string = '&nbsp;'.join (re.split ('  +', string))
-		string = '\n'.join (re.split ('\n\r|\r\n', string))
-		string = '<BR>\n'.join (re.split ('\n|\r', string))
+		string = string.replace (b'&', b'&amp;')
+		string = string.replace (b'<', b'&lt;')
+		string = string.replace (b'>', b'&gt;')
+		string = string.replace (b'\t', b'   ')
+		string = b'&nbsp;'.join (re.split (b'  +', string))
+		string = b'\n'.join (re.split (b'\n\r|\r\n', string))
+		string = b'<BR>\n'.join (re.split (b'\n|\r', string))
 		return string
 	def unmangle (self, string):
 		string = '\n'.join (re.split (r'\s*<BR>\s*', string))
@@ -244,8 +248,8 @@ class Converter:
 	def as_string (self, string):
 		level = 0
 		while True:
-			if (']' + '=' * level + ']') not in string:
-				return '([' + '=' * level + '[' + string + ']' + '=' * level + '])'
+			if (b']' + b'=' * level + b']') not in string:
+				return b'([' + b'=' * level + b'[' + string + b']' + b'=' * level + b'])'
 			level += 1
 	def as_id (self, string):
 		ret = '_'.join (re.split ('[^a-zA-Z0-9]', string))
@@ -285,7 +289,7 @@ class Converter:
 			if self.icon:
 				self.wfi += 'Icon: ' + self.icon._name + '\n'
 			media = ',\n'.join (['Wherigo.Media.%s' % m._name for m in ZMedia._list])
-			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, self.as_string (self.lua)))
+			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, lua.makestr (self.as_string (self.lua))))
 			wfz.writestr (os.path.join (self.name, '_cartridge.wfi'), self.wfi)
 			if self.gwc:
 				files = zip (self.file_id, self.offset)

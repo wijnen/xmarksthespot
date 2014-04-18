@@ -416,6 +416,9 @@ called the Long Value. Empty lines are considered indented empty lines, even if
 they don't have any indentation.  Such lines (with or without indentation) are
 stripped from the end of a long value, but preserved in other places.
 
+Lines starting with a (possibly indented) \textit{#} are comments and ignored
+completely.
+
 Now follows a list of keys, with their details. Every key MUST occur exactly
 once, unless otherwise specified. Attributes not defined here MUST NOT be
 used. Values for fields which do not allow Attributes may contain any
@@ -423,6 +426,7 @@ characters, including semicolons (this exception is not shown in the regular
 expression above).
 
 \newcommand\defkey[5]{\par\noindent\begin{tabular}{|l|l|}\hline Key&#1\\Value&\parbox{.75\textwidth}{#2}\\Long Value&\parbox{.75\textwidth}{#3}\\Attributes&\parbox{.75\textwidth}{#4}\\Comments&\parbox{.75\textwidth}{#5}\\\hline\end{tabular}\par}
+\defkey{Format}{The file format of the cartridge.  Currenly always \textit{1.0}.}{-}{-}{}
 \defkey{Name}{The cartridge's long name. The filename, which is the short name, SHOULD be an abbreviation of this long name.}{The cartridge's description.}{-}{}
 \defkey{Version}{The cartridge's version.}{-}{-}{The version SHOULD be a period-separated string. Versions released later SHOULD have a higher version than earlier versions of the same Cartridge. Comparing versions is done by splitting the version on periods and comparing each group numerically if possible, and alphabetically otherwise. The first group which differs defines which version is higher. For example, \textit{1.2.8} is a lower version than \textit{1.2.10} and both are lower than \textit{1.2.unreleased}}
 \defkey{Author}{The Author.}{-}{-}{}
