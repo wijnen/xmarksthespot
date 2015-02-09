@@ -27,6 +27,21 @@ import re
 
 SIZE = gtk.ICON_SIZE_BUTTON
 
+def fill_cache (media): # {{{
+	if media._cache is not None:
+		return
+	for f in media._provider['File']:
+		pl = gtk.gdk.PixbufLoader ()
+		try:
+			pl.write (wherigo._wfzopen (f[0]).read ())
+			pl.close ()
+		except:
+			print ('Not using %s: %s' % (f[0], sys.exc_info ()[1]))
+			continue
+		media._cache = pl.get_pixbuf ()
+		return
+# }}}
+
 class Book (gtk.Notebook): # {{{
 	def __init__ (self, gui):
 		gtk.Notebook.__init__ (self)
@@ -64,6 +79,7 @@ class Details (gtk.VBox): # {{{
 		self.gui = gui
 		self.data = gui.data
 		gtk.VBox.__init__ (self)
+		self.alt = gtk.Label ()
 		self.scrolledwindow = gtk.ScrolledWindow ()
 		self.image = gtk.Image ()
 		self.text = gtk.TextView ()
@@ -79,15 +95,25 @@ class Details (gtk.VBox): # {{{
 			self.cb = None
 		self.scrolledwindow.set_policy (gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
 		self.scrolledwindow.add_with_viewport (self.image)
+		self.pack_start (self.alt, False, True)
 		self.pack_start (self.scrolledwindow, True, True)
 		self.pack_start (self.text, True, True)
 		self.pack_start (self.buttons, False, True)
 		self.show_all ()
+		self.alt.hide ()
 	def set (self, (media, text, buttons, cb)):
 		# Media
-		if isinstance (media, wherigo.ZMedia) and hasattr (media, '_image'):
-			self.image.set_from_pixbuf (media._image)
-			self.scrolledwindow.show ()
+		if isinstance (media, wherigo.ZMedia):
+			fill_cache (media)
+			if media._cache is None:
+				self.alt.set_text (media.AltText)
+				self.alt.show ()
+				self.image.set_from_pixbuf (None)
+				self.scrolledwindow.hide ()
+			else:
+				self.image.set_from_pixbuf (media._cache)
+				self.scrolledwindow.show ()
+				self.alt.hide ()
 		else:
 			self.image.set_from_pixbuf (None)
 			self.scrolledwindow.hide ()
@@ -105,6 +131,7 @@ class Details (gtk.VBox): # {{{
 		# text input: None
 		while len (self.buttons.get_children ()) > 0:
 			self.buttons.remove (self.buttons.get_children ()[0])
+		entry = None
 		for b in buttons:
 			if b is None:
 				# Text input.
@@ -115,7 +142,6 @@ class Details (gtk.VBox): # {{{
 				else:
 					entry.set_sensitive (False)
 					entry.set_text (cb or '')
-					entry.grab_focus ()
 				continue
 			box = gtk.HBox ()
 			if b[1] is not None:
@@ -141,6 +167,8 @@ class Details (gtk.VBox): # {{{
 			self.buttons.pack_start (box, True, True)
 		self.buttons.show_all ()
 		self.show ()
+		if entry is not None:
+			entry.grab_focus ()
 # }}}
 class List (gtk.VBox): # {{{
 	def __init__ (self, gui, title):# {{{
@@ -223,7 +251,7 @@ class List (gtk.VBox): # {{{
 				# (commandname, pre-text, other-text, ((text, target), ...), source)
 				if cmd.CmdWith:
 					l = []
-					for k in [x for x in self.data.gameobject.AllZObjects.list () if isinstance (x, (wherigo.ZCharacter, wherigo.ZItem)) and x is not self.selected_item] if cmd.WorksWithAll else cmd.WorksWithList.list ():
+					for k in [x for x in self.data.gameobject.AllZObjects.list () if isinstance (x, wherigo.ZItem) and x is not self.selected_item] if cmd.WorksWithAll else cmd.WorksWithList.list ():
 						if k._is_visible (self.data.debug):
 							l.append ((k.Name, k))
 					if len (l) == 0:
@@ -303,10 +331,13 @@ class List (gtk.VBox): # {{{
 	# }}}
 	def make_icon (self, item): # {{{
 		'''Make Pixbuf icon for object.  Can be overridden.'''
-		if item.Icon is None or not hasattr (item.Icon, '_image'):
+		if item.Icon is None:
+			return None
+		fill_cache (item.Icon)
+		if item.Icon._cache is None:
 			return None
 		size = gtk.icon_size_lookup (SIZE)
-		return item.Icon._image.scale_simple (size[0], size[1], gtk.gdk.INTERP_BILINEAR)
+		return item.Icon._cache.scale_simple (size[0], size[1], gtk.gdk.INTERP_BILINEAR)
 	# }}}
 # }}}
 class MarkerList (List): # {{{
@@ -353,13 +384,17 @@ class MarkerList (List): # {{{
 		'''Refresh selected status of markers on the map.'''
 		if self.selected_item is not None and self.selected_item._id is not None:
 			layer = self.get_layer (self.selected_item)
-			layer.markers[self.selected_item._id][1][0] = False
-			layer.tracks[self.selected_item._id][1][0] = False
+			if len (layer.markers) > self.selected_item._id:
+				layer.markers[self.selected_item._id][1][0] = False
+			if len (layer.tracks) > self.selected_item._id:
+				layer.tracks[self.selected_item._id][1][0] = False
 		super (MarkerList, self).selection_changed (selection)
 		if self.selected_item is not None and self.selected_item._id is not None:
 			layer = self.get_layer (self.selected_item)
-			layer.markers[self.selected_item._id][1][0] = True
-			layer.tracks[self.selected_item._id][1][0] = True
+			if len (layer.markers) > self.selected_item._id:
+				layer.markers[self.selected_item._id][1][0] = True
+			if len (layer.tracks) > self.selected_item._id:
+				layer.tracks[self.selected_item._id][1][0] = True
 		self.data.map.update ()
 	# }}}
 	def remove_item (self, item): # {{{
@@ -414,21 +449,32 @@ class Locations (MarkerList): # {{{
 		return False
 	def update_map (self):
 		# Add zone boundaries.
-		i = self.store.get_iter_first ()
-		self.layers[0].tracks = [None] * len (self.layers[0].markers)
-		count = 0
-		while i:
-			item = self.store.get_value (i, 2)
-			i = self.store.iter_next (i)
-			if item._id is None:
-				continue
-			track = [(x.latitude, x.longitude) for x in item.Points.list () if x != wherigo.INVALID_ZONEPOINT]
-			if len (track) > 0:
-				track.append (track[0])
-			self.layers[0].tracks[count] = [track, self.layers[0].markers[count][1]]
-			count += 1
-		# Do all the usual stuff.
-		super (Locations, self).update_map ()
+		for layer in self.layers:
+			for track in layer.tracks:
+				track[0] = []
+				points = track[2].Points.list ()
+				for point in points:
+					track[0].append ((point.latitude, point.longitude))
+				if len (points) > 0:
+					track[0].append ((points[0].latitude, points[0].longitude))
+	def add_item (self, item): # {{{
+		pos = item._get_pos ()
+		if pos:
+			layer = self.get_layer (item)
+			item._id = len (layer.tracks)
+			layer.tracks += ([[(pos.latitude, pos.longitude)], [False, item.Active and item.Visible], item],)
+			self.data.map.update ()
+		else:
+			item._id = None
+	# }}}
+	def remove_item (self, item): # {{{
+		if item._id is not None:
+			layer = self.get_layer (item)
+			del layer.tracks[item._id]
+			for check in layer.markers:
+				if check[2]._id > item._id:
+					check[2]._id -= 1
+	# }}}
 widgets['Locations'] = Locations
 # }}}
 class Inventory (List): # {{{
@@ -448,14 +494,15 @@ class Environment (MarkerList): # {{{
 		self.color = gui.gui.objectcolor
 		self.tabname = 'Environment'
 		self.size = 0
-		MarkerList.__init__ (self, gui, 'Item or person', (self.color, gui.gui.charactercolor))
-	def get_layer (self, info):
-		return self.layers[1] if isinstance (info, wherigo.ZCharacter) else self.layers[0]
+		MarkerList.__init__ (self, gui, 'Item or person', (self.color,))
 	def must_show (self, item):
 		#if settings.show_start:
 		#	kret = [wherigo._starting_marker.Name]
 		#	fret = [(wherigo._starting_marker.Name, config['positioncolor'], wherigo._starting_marker, True, True)]
-		return item._is_visible (self.data.debug) and item.Container is not wherigo.Player and isinstance (item, (wherigo.ZItem, wherigo.ZCharacter))
+		if not isinstance(item, wherigo.ZItem):
+			return False
+		#print('item %s %s %s %s %s' % (item.Name, item.Active, item.Visible, item._is_visible(self.data.debug), item.Container))
+		return item._is_visible (self.data.debug) and item.Container is not wherigo.Player and isinstance (item, wherigo.ZItem)
 widgets['Environment'] = Environment
 # }}}
 class Tasks (List): # {{{

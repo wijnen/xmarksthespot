@@ -1,7 +1,7 @@
 lua.py
 wherigo.py
 *.pyc
-*.gwc
+*.gui
 format/*.aux
 format/*.log
 format/*.pdf

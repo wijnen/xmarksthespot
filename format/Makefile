@@ -1,8 +1,6 @@
 all: wherigo.pdf
 
-%.dvi: %.tex
-	latex $<
-
-%.pdf: %.dvi
-	dvipdf $<
+%.pdf: %.tex
+	pdflatex $<
+	pdflatex $<
 	evince $@

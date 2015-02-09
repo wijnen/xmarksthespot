@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # vim: set fileencoding=utf-8 foldmethod=marker :
 # xmarksthespot - player for wherigo cartridges.
-# Copyright 2012 Bas Wijnen <wijnen@debian.org> {{{
+# Copyright 2012-2015 Bas Wijnen <wijnen@debian.org> {{{
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -29,48 +29,55 @@ import time
 import wherigo
 import Map
 import widgets
+import wfapi
 import gobject
-gobject.threads_init ()
+gobject.threads_init()
 try:
+	raise SyntaxError
+	import pygst
+	pygst.require('0.10')
 	import gst
 	have_sound = True
 except:
-	print ('gst could not be imported: no sound')
+	print('gst could not be imported: no sound')
 	have_sound = False
 import argparse
+sys.path += ['/usr/share/xmarksthespot']
 import xmtsconfig
 # }}}
 
 # Argument parsing. {{{
-a = argparse.ArgumentParser ()
-a.add_argument ('cartridge', default = None, nargs = '?', help = 'The cartridge to load', type = str)
-a.add_argument ('--debug', help = 'Enable debugging mode', default = False, action = 'store_true')
-a.add_argument ('--map', help = 'Map to use as background', type = str, default = None)
-args = a.parse_args ()
+a = argparse.ArgumentParser()
+a.add_argument('cartridge', default = None, nargs = '?', help = 'The cartridge to load', type = str)
+a.add_argument('--debug', help = 'Enable debugging mode', default = False, action = 'store_true')
+a.add_argument('--map', help = 'Map to use as background', type = str, default = None)
+args = a.parse_args()
 gwcfile = args.cartridge
 class Settings:
-	def __init__ (self):
+	def __init__(self):
 		self.show_start = False
 		self.gameobject = None
-settings = Settings ()
+		self.map = None
+		self.format = 2
+settings = Settings()
 settings.debug = args.debug
 # }}}
 
-def backtrace (): # {{{
-	sys.stderr.write ('=' * 78 + '\n')
+def backtrace(): # {{{
+	sys.stderr.write('=' * 78 + '\n')
 	try:
 		d = 0
 		while True:
-			frame = sys._getframe (d)
-			sys.stderr.write ('\t%s:%d %s\n' % (frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name))
+			frame = sys._getframe(d)
+			sys.stderr.write('\t%s:%d %s\n' % (frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name))
 			d += 1
 	except ValueError:
 		pass
-	sys.stderr.write ('=' * 78 + '\n')
+	sys.stderr.write('=' * 78 + '\n')
 # }}}
 
 class Position: # {{{
-	def __init__ (self, lat = None, epx = None, lon = None, epy = None, alt = None, epv = None, speed = None, eps = None, climb = None, epc = None, track = None, epd = None, time = None, ept = None):
+	def __init__(self, lat = None, epx = None, lon = None, epy = None, alt = None, epv = None, speed = None, eps = None, climb = None, epc = None, track = None, epd = None, time = None, ept = None):
 		self.lat = lat
 		self.epx = epx
 		self.lon = lon
@@ -85,9 +92,9 @@ class Position: # {{{
 		self.epd = epd
 		self.time = time
 		self.ept = ept
-	def __nonzero__ (self):
+	def __nonzero__(self):
 		return self.time is not None
-	def __str__ (self):
+	def __str__(self):
 		if self.time == None:
 			return 'None'
 		return 'lat:%f±%f lon:%f±%f alt:%f±%f speed:%f±%f climb:%f±%f track:%f±%f time:%s±%f' % (self.lat, self.epx, self.lon, self.epy, self.alt, self.epv, self.speed, self.eps, self.climb, self.epc, self.track, self.epd, self.time, self.ept)
@@ -95,42 +102,42 @@ class Position: # {{{
 
 class GpsPoller: # {{{
 	def __init__(self):
-		self.current_value = Position ()
+		self.current_value = Position()
 		self.idle = [10, None]
 		self.session = None
-	def get_pos (self):
+	def get_pos(self):
 		#print 'getting pos', self.session
 		if self.session is None:
 			try:
 				#print 'new session'
-				self.session = gps.gps (mode = gps.WATCH_ENABLE)
+				self.session = gps.gps(mode = gps.WATCH_ENABLE)
 			except:
-				#print 'no gps:', sys.exc_value
+				#print 'no gps:', sys.exc_info()[1]
 				self.session = None
-				return Position ()
+				return Position()
 		try:
-			while self.session.waiting ():
-				value = self.session.next ()
+			while self.session.waiting():
+				value = self.session.next()
 				#print value
 				# Save only position, not every event.
 				if value['class'] == 'DEVICE' and value['activated'] == 0:
-					self.current_value = Position ()
+					self.current_value = Position()
 					continue
 				if value['class'] != 'TPV':
 					continue
-				if value['mode'] < 2 or not all ([x in value for x in ('lat', 'lon', 'epx', 'epy')]):
-					self.current_value = Position ()
+				if value['mode'] < 2 or not all([x in value for x in ('lat', 'lon', 'epx', 'epy')]):
+					self.current_value = Position()
 				else:
-					self.current_value = Position (*[value[x] if x in value else None for x in ('lat', 'epx', 'lon', 'epy', 'alt', 'epv', 'speed', 'eps', 'climb', 'epc', 'track', 'epd', 'time', 'ept')])
+					self.current_value = Position(*[value[x] if x in value else None for x in ('lat', 'epx', 'lon', 'epy', 'alt', 'epv', 'speed', 'eps', 'climb', 'epc', 'track', 'epd', 'time', 'ept')])
 		except:
-			#print 'gps exception:', sys.exc_value
-			self.current_value = Position ()
+			#print 'gps exception:', sys.exc_info()[1]
+			self.current_value = Position()
 		#print self.current_value
 		ret = self.current_value
 		if self.idle[1] == ret.time:
 			if self.idle[0] == 10:
 				self.idle = [0, None]
-				ret = Position ()
+				ret = Position()
 				self.current_value = ret
 				self.session = None
 			else:
@@ -140,14 +147,18 @@ class GpsPoller: # {{{
 		return ret
 # }}}
 
-def make_str (degs, plus, minus): # {{{
+def make_str(degs, plus, minus): # {{{
 	'Make a string value from a float degree value'
 	sign = plus if degs > 0 else minus
-	degs = abs (degs)
-	deg = int (degs)
+	degs = abs(degs)
+	if settings.format == 0:
+		return '''%.6f°%s''' % (degs, sign)
+	deg = int(degs)
 	degs -= deg
 	degs *= 60
-	min = int (degs)
+	if settings.format == 1:
+		return '''%d°%.4f'%s''' % (deg, degs, sign)
+	min = int(degs)
 	degs -= min
 	degs *= 60
 	sec = degs
@@ -156,64 +167,77 @@ def make_str (degs, plus, minus): # {{{
 
 class CB: # {{{
 	pipeline = None
-	def dialog (self, table):
+	def dialog(self, table):
 		global queue
-		self.update ()
-		queue_reset ()
-		for m in table.list ():
+		self.update()
+		queue_reset()
+		for m in table.list():
 			queue += (m,)
-		next_message ()
-		self.update ()
-	def message (self, table):
+		next_message()
+		self.update()
+	def message(self, table):
 		global queue
-		self.update ()
-		queue_reset ()
+		self.update()
+		queue_reset()
 		queue += (table,)
-		next_message ()
-		self.update ()
-	def get_input (self, zinput):
+		next_message()
+		self.update()
+	def get_input(self, zinput):
 		global queue
-		self.update ()
-		queue_reset ()
+		self.update()
+		queue_reset()
 		queue += (zinput,)
-		next_message ()
-		self.update ()
-	def play (self, media):
-		self.stop_sound ()	# includes update.
-		if not hasattr (media, '_sound'):
-			return
+		next_message()
+		self.update()
+	def play(self, media):
+		self.stop_sound()	# includes update.
 		if have_sound:
-			try:
-				CB.pipeline = gst.Pipeline ("pipeline")
-				CB.source = gst.element_factory_make ("appsrc", "source")
-				CB.pipeline.add (CB.source)
-				CB.decoder = gst.element_factory_make ("decodebin", "decoder")
-				CB.pipeline.add (CB.decoder)
-				CB.converter = gst.element_factory_make ("audioconvert", "converter")
-				CB.pipeline.add (CB.converter)
-				CB.sink = gst.element_factory_make ("alsasink", "sink")
-				CB.pipeline.add (CB.sink)
-				CB.source.link (CB.decoder)
-				CB.decoder.connect ('new-decoded-pad', self.new_pad)
-				CB.converter.link (CB.sink)
-				CB.pipeline.set_state (gst.STATE_PAUSED)
-				CB.source.emit ('push-buffer', gst.Buffer (media._sound))
-			except:
-				# Emit error message?
-				print ('playing sound failed: %s' % sys.exc_value)
-				pass
-	def new_pad (self, dbin, pad, is_last):
-		try:
-			CB.decoder.link (CB.converter)
-			CB.pipeline.set_state (gst.STATE_PLAYING)
-		except:
-			pass
-	def stop_sound (self):
-		self.update ()
+			def play(cache):
+				def new_pad(dbin, pad, is_last):
+					try:
+						CB.decoder.link(CB.sink)
+						CB.pipeline.set_state(gst.STATE_PLAYING)
+					except:
+						pass
+				CB.pipeline = gst.Pipeline("pipeline")
+				CB.source = gst.element_factory_make("appsrc", "source")
+				CB.pipeline.add(CB.source)
+				CB.decoder = gst.element_factory_make("decodebin", "decoder")
+				CB.pipeline.add(CB.decoder)
+				CB.sink = gst.element_factory_make("autoaudiosink", "sink")
+				CB.pipeline.add(CB.sink)
+				CB.source.link(CB.decoder)
+				CB.decoder.connect('new-decoded-pad', new_pad)
+				CB.pipeline.set_state(gst.STATE_PAUSED)
+				CB.source.emit('push-buffer', gst.Buffer(cache))
+				CB.pipeline.get_state()
+				CB.pipeline.query_duration(gst.Format(gst.FORMAT_TIME))
+			if not media._cache:
+				for f in media._provider['File']:
+					if f[0].lower().endswith(os.extsep + 'fdl'):
+						continue
+					media._cache = wherigo._wfzopen(f[0]).read()
+					try:
+						play(media._cache)
+						break
+					except:
+						pass
+				else:
+					media._cache = None
+					# Emit error message?
+					print('playing sound failed: %s' % sys.exc_info()[1])
+			else:
+				try:
+					play(media._cache)
+				except:
+					media._cache = None
+					print('playing sound from cache failed: %s' % sys.exc_info()[1])
+	def stop_sound(self):
+		self.update()
 		if have_sound:
 			try:
 				if CB.pipeline:
-					CB.pipeline.set_state (gst.STATE_NULL)
+					CB.pipeline.set_state(gst.STATE_NULL)
 					CB.pipeline = None
 					CB.source = None
 					CB.decoder = None
@@ -221,50 +245,65 @@ class CB: # {{{
 					CB.sink = None
 			except:
 				pass
-	def set_status (self, text):
-		self.update ()
+	def set_status(self, text):
+		self.update()
 		g.statusbar = text
-	def save (self):
-		self.update ()
-		save_cartridge (None) # TODO: filename?
-	def quit (self):
-		self.update ()
-		print ('request to quit')
-		#gtk.main_quit ()
-	def drive_to (self, *a):
-		self.update ()
-		print ("I'm supposed to drive to", a)
+	def save(self):
+		self.update()
+		save_cartridge(None) # TODO: filename?
+	def quit(self):
+		self.update()
+		print('request to quit')
+		#gtk.main_quit()
+	def drive_to(self, *a):
+		self.update()
+		print("I'm supposed to drive to", a)
 		# TODO
-	def alert (self):
-		self.update ()
+	def alert(self):
+		self.update()
 		print 'alert!'
 		# Note: this doesn't do anything (on machines without a pc speaker? TODO)
-		gtk.gdk.beep ()
-	def log (self, level, levelname, text):
-		self.update ()
-		if level >= minloglevel:
-			logline = '%s|%f|%f|%f|%f|%s: %s' % (time.strftime ('%Y%m%d%H%M%S', time.gmtime ()), wherigo.Player.ObjectLocation.Latitude, wherigo.Player.ObjectLocation.Longitude, wherigo.Player.ObjectLocation.Altitude, wherigo.Player.Precision, levelname, text)
-			print (logline)
-			log.add_log (level, levelname, text)
-	def show (self, screen, item):
+		gtk.gdk.beep()
+	def log(self, level, levelname, text):
+		self.update()
+		if not isinstance(text, str):
+			if isinstance(text, wherigo._lang.Table):
+				text = text.dict()
+			#text = '; '.join('%s: %s' % (x, repr(getattr(text, x))) for x in dir(text))
+			text = repr(text)
+		if level >= config['LogLevel']:
+			if wherigo.Player and wherigo.Player.ObjectLocation:
+				lat = '%f' % wherigo.Player.ObjectLocation.latitude
+				lon = '%f' % wherigo.Player.ObjectLocation.longitude
+				alt = '%f' % wherigo.Player.ObjectLocation.altitude()
+				err = '%f' % wherigo.Player.PositionAccuracy()
+			else:
+				lat = ''
+				lon = ''
+				alt = ''
+				err = ''
+			logline = '%s|%s|%s|%s|%s|%s: %s' % (time.strftime('%Y%m%d%H%M%S', time.gmtime()), lat, lon, alt, err, levelname, text)
+			print(logline)
+			#log.add_log(level, levelname, text)
+	def show(self, screen, item):
 		# 'Detail', 'Inventory', 'Item', 'Location', 'Main', 'Tasks'
-		self.update ()
+		self.update()
 		if screen == wherigo.DETAILSCREEN:
-			if isinstance (item, wherigo.Zone):
+			if isinstance(item, wherigo.Zone):
 				g.focus_location = True
 				g.select_location = item
-			elif isinstance (item, (wherigo.ZItem, wherigo.ZCharacter)):
+			elif isinstance(item, wherigo.ZItem):
 				if item.Container == wherigo.Player:
 					g.focus_inventory = True
 					g.select_inventory = item
 				else:
 					g.focus_environment = True
 					g.select_environment = item
-			elif isinstance (item, wherigo.ZTask):
+			elif isinstance(item, wherigo.ZTask):
 				g.focus_task = True
 				g.select_task = item
 			else:
-				raise AssertionError ('Invalid type to show details for')
+				raise AssertionError('Invalid type %s to show details for' % repr(item.dict()))
 		elif screen == wherigo.INVENTORYSCREEN:
 			g.focus_inventory = True
 		elif screen == wherigo.ITEMSCREEN:
@@ -272,69 +311,73 @@ class CB: # {{{
 		elif screen == wherigo.LOCATIONSCREEN:
 			g.focus_location = True
 		elif screen == wherigo.MAINSCREEN:
+			print('Ignoring request to go to the "main" screen')
 			pass
 		elif screen == wherigo.TASKSCREEN:
-			g.focus_task = True
+			g.focus_tasks = True
 		else:
-			raise AssertionError ('Invalid screen to show')
-	def update (self):
+			raise AssertionError('Invalid screen to show')
+	def update(self):
 		g.update_location = True
 		g.update_inventory = True
 		g.update_environment = True
 		g.update_task = True
 		if settings.debug:
 			g.update_timer = True
-	def update_stats (self):
-		#locationscreen.update_stats ()
-		#environmentscreen.update_stats ()
+	def update_stats(self):
+		#locationscreen.update_stats()
+		#environmentscreen.update_stats()
 		pass
-	def update_map (self):
-		#locationscreen.update_map ()
-		#environmentscreen.update_map ()
+	def update_map(self):
+		#locationscreen.update_map()
+		#environmentscreen.update_map()
 		pass
-	def add_timer (self, time, cb):
+	def add_timer(self, time, cb):
 		if time > 0:
-			return gobject.timeout_add (int (time * 1000), cb)
+			return gobject.timeout_add(int(time * 1000), cb)
 		else:
-			return gobject.idle_add (cb)
-	def remove_timer (self, handle):
-		gobject.source_remove (handle)
+			return gobject.idle_add(cb)
+	def remove_timer(self, handle):
+		gobject.source_remove(handle)
 # }}}
 
-def next_message (widget = None, name = None, item = None, source = None): # {{{
+def next_message(widget = None, name = None, item = None, source = None): # {{{
 	global queue, current_msg, current_data, restore_page
 	# current_msg is the current message object
 	m = current_msg
-	if len (queue) != 0:
-		current_msg = queue.pop (0)
+	if len(queue) != 0:
+		current_msg = queue.pop(0)
 	else:
 		current_msg = None
 	next_current = current_msg
+	if current_msg is None and restore_page:
+		restore_page()
 	if m is not None:
 		# Fire event for previous message
-		if isinstance (m, wherigo.ZInput):
+		if wherigo.ZInput.made(m):
 			# No arguments.
 			assert name is None
 			if m.InputType == 'MultipleChoice':
 				g.history_add = (current_data[0], current_data[1], current_data[2], item)
 				if m.OnGetInput:
-					print 'OnGetInput multiple choice %s' % m.Name
-					m.OnGetInput (m, item)
-					cbs.update ()
+					#print 'OnGetInput multiple choice %s' % m.Name
+					m.OnGetInput(m, item)
+					cbs.update()
 				else:
 					print 'no callback for multiple choice input'
 			elif m.InputType == 'Text':
 				assert item is None
-				item = widget.get_text () if widget else None
+				item = widget.get_text() if widget else None
 				g.history_add = (current_data[0], current_data[1], current_data[2], item)
 				if m.OnGetInput:
-					print 'OnGetInput text %s' % m.Name
-					m.OnGetInput (m, item)
-					cbs.update ()
+					#print 'OnGetInput text %s' % m.Name
+					m.OnGetInput(m, item)
+					cbs.update()
 				else:
+					print repr(m.OnGetInput)
 					print 'no callback for text input'
 			else:
-				raise AssertionError ('unknown input type')
+				raise AssertionError('unknown input type')
 		else:
 			# Argument is passed to button callback.
 			if item is None:
@@ -344,100 +387,102 @@ def next_message (widget = None, name = None, item = None, source = None): # {{{
 				# for Ok buttons, name is used; for choices, item is used. Allow both.
 				#print 'Callback'
 				m['Callback'] (item)
-				cbs.update ()
+				cbs.update()
 			else:
 				#print 'not running Callback for %s' % m['Name']
 				pass
 	if current_msg is None:
-		if restore_page:
-			restore_page ()
 		g.message_show = False
 		return
 	if next_current is not current_msg:
 		# The queue changed since this was set; don't interfere.
 		return
-	if isinstance (current_msg, wherigo.ZInput):
-		if hasattr (current_msg, 'Media'):
+	if wherigo.ZInput.made(current_msg):
+		if hasattr(current_msg, 'Media'):
 			media = current_msg.Media
 		else:
 			media = None
 		text = current_msg.Text
 		if current_msg.InputType == 'MultipleChoice':
 			# (commandname, pre-text, other-text, ((text, target), ...), source
-			buttons = [(None, None, None, [(x, x) for x in current_msg.Choices.list ()], None)]
+			buttons = [(None, None, None, [(x, x) for x in current_msg.Choices.list()], None)]
 		elif current_msg.InputType == 'Text':
 			buttons = [None]
 		else:
-			raise AssertionError ('unknown input type')
+			raise AssertionError('unknown input type')
 	else:
 		if 'Media' in current_msg:
 			media = current_msg['Media']
 		else:
 			media = None
-		text = current_msg['Text']
+		text = current_msg['Text'] or ''
 		# (commandname, pre-text, other-text, ((text, target), ...), source
 		if 'Buttons' in current_msg:
-			b = current_msg['Buttons'].list ()
-			buttons = [(None, None, None, [(b[t], 'Button%d' % (t + 1)) for t in range (len (b))], None)]
+			b = current_msg['Buttons'].list()
+			buttons = [(None, None, None, [(b[t], 'Button%d' % (t + 1)) for t in range(len(b))], None)]
 		else:
 			buttons = [(None, None, None, [('Ok', 'Button1')], None)]
 	if not g.message_show:
 		restore_page = g.save_page
-	text = re.sub ('<br\s*/?>', '', text, flags = re.I)
-	text = re.sub ('&nbsp;', ' ', text, flags = re.I)
-	text = re.sub ('&lt;', '<', text, flags = re.I)
-	text = re.sub ('&gt;', '>', text, flags = re.I)
-	text = re.sub ('&amp;', '&', text, flags = re.I)
+	text = re.sub('<br\s*/?>', '', text, flags = re.I)
+	text = re.sub('&nbsp;', ' ', text, flags = re.I)
+	text = re.sub('&lt;', '<', text, flags = re.I)
+	text = re.sub('&gt;', '>', text, flags = re.I)
+	text = re.sub('&amp;', '&', text, flags = re.I)
 	current_data = (media, text, buttons)
 	g.message_set = (current_data[0], current_data[1], current_data[2], next_message)
 	g.focus_message = True
 # }}}
 
-def queue_reset (): # {{{
+def queue_reset(): # {{{
 	global queue
 	queue = []
 # }}}
 
 # GUI actions. {{{
-def file_new (widget): # {{{
+def file_new(widget): # {{{
 	settings.gameobject = None
-	wherigo.ZCartridge._new ()
+	wherigo._new(config)
 	g.message_show = False
-	cbs.update ()
+	cbs.update()
 # }}}
 
-def file_open (widget): # {{{
+def file_search(widget): # {{{
+	g.show_search = True
+# }}}
+
+def file_open(widget): # {{{
 	g.show_opendialog = True
 # }}}
 
-def file_save (widget): # {{{
+def file_save(widget): # {{{
 	g.show_savedialog = True
 # }}}
 
-def file_quit (widget): # {{{
-	gtk.main_quit ()
+def file_quit(widget): # {{{
+	gtk.main_quit()
 # }}}
 
-def help_about (widget): # {{{
-	aboutdialog.show ()
+def help_about(widget): # {{{
+	aboutdialog.show()
 # }}}
 
-def open_cb (response): # {{{
+def open_cb(response): # {{{
 	if response != 0:
-		open_cartridge (g.open_filename)
+		open_cartridge(g.open_filename)
 	g.show_opendialog = False
 	return True
 # }}}
 
-def save_cb (response): # {{{
+def save_cb(response): # {{{
 	if response != 0:
-		save_cartridge (g.save_filename)
+		save_cartridge(g.save_filename)
 	g.show_savedialog = False
 	return True
 # }}}
 
-def open_cartridge (cartfile): # {{{
-	def start_game (widget, name, item, source): # {{{
+def open_cartridge(cartfile): # {{{
+	def start_game(widget, name, item, source): # {{{
 		g.message_show = False
 		startlayer.markers = []
 		# Player location MUST be valid at this point.
@@ -446,41 +491,23 @@ def open_cartridge (cartfile): # {{{
 		if wherigo.Player.ObjectLocation == wherigo.INVALID_ZONEPOINT:
 			wherigo.Player.ObjectLocation = settings.gameobject.StartingLocation
 			if wherigo.Player.ObjectLocation == wherigo.INVALID_ZONEPOINT:
-				wherigo.Player.ObjectLocation = wherigo.ZonePoint (0, 0, 0)
+				wherigo.Player.ObjectLocation = wherigo.ZonePoint(0, 0, 0)
 		if settings.gameobject.OnStart:
-			print 'OnStart'
-			settings.gameobject.OnStart (settings.gameobject)
-		cbs.update ()
+			#print 'OnStart'
+			settings.gameobject.OnStart(settings.gameobject)
+		cbs.update()
 	# }}}
-	file_new (None)
-	# Set up config. {{{
-	config = {}
-	try:
-		name = os.getlogin ().capitalize ()
-	except:
-		# We're on Windows, or something else is wrong.
-		# Don't bother, just use a default.
-		name = 'Monty Python'
-	for key, default in (('Id', 0), ('URL', 'about:blank'), ('Device', 'PocketPC'), ('PlayerName', name), ('CompletionCode', 'completion-code'), ('env_Platform', 'xmarksthespot'), ('env_CartFolder', '/whatever'), ('env_SyncFolder', '/whatever'), ('env_LogFolder', '/whatever'), ('env_PathSep', '/'), ('env_DeviceID', 'Python'), ('env_Version', '2.11-compatible'), ('env_Downloaded', '0'), ('env_CartFilename', cartfile), ('env_Device', None)):
-		env = os.getenv ('XMTS_' + key.upper ())
-		if env is not None:
-			config[key] = env
-		elif hasattr (g, 'config_' + key):
-			config[key] = getattr (g, 'config_' + key)
-		else:
-			config[key] = default
-	if config['env_Device'] is None:
-		config['env_Device'] = config['Device']
-	# }}}
-	settings.gameobject = wherigo._load (cartfile, cbs, config)
+	file_new(None)
+	config['env_Cartfilename'] = forced_cartfilename if forced_cartfilename is not None else cartfile
+	settings.gameobject = wherigo._load(cartfile, config)
 	# Set up start message. {{{
 	text = 'You are about to play "%s"' % settings.gameobject.Name
-	if settings.gameobject.Description.strip () != '':
+	if settings.gameobject.Description.strip() != '':
 		text += ':\n\n' + settings.gameobject.Description
 	else:
 		text += '.'
 	text += '\n\nPlease go to the starting point and press ok.\n'
-	if settings.gameobject.StartingLocationDescription.strip () != '':
+	if settings.gameobject.StartingLocationDescription.strip() != '':
 		text += 'The starting point for this cartridge is defined as follows:\n\n' + settings.gameobject.StartingLocationDescription
 	# (commandname, pre-text, other-text, ((text, target), ...), source
 	buttons = [(None, None, None, (('Ok', None),), None)]
@@ -490,43 +517,43 @@ def open_cartridge (cartfile): # {{{
 	if settings.gameobject.StartingLocation:
 		startlayer.markers = [[(settings.gameobject.StartingLocation.latitude, settings.gameobject.StartingLocation.longitude), (True, True)]]
 	# }}}
-	cbs.update ()
+	cbs.update()
 # }}}
 
-def save_cartridge (cartfile): # {{{
+def save_cartridge(cartfile): # {{{
 	if settings.gameobject.OnSync:
-		print 'OnSync'
-		settings.gameobject.OnSync ()
+		#print 'OnSync'
+		settings.gameobject.OnSync()
 	# TODO.
 # }}}
 
-def command (object, name, item = None): # {{{
+def command(object, name, item = None): # {{{
 	cb = 'On' + name
-	if hasattr (object, cb):
-		getattr (object, cb) (object, item)
-		cbs.update ()
+	if hasattr(object, cb):
+		getattr(object, cb) (object, item)
+		cbs.update()
 	else:
-		print ("Callback %s:%s not called, because it doesn't exist" % (object.Name, cb))
+		print("Callback %s:%s not called, because it doesn't exist" % (object.Name, cb))
 # }}}
 
-def skip_one (): # {{{
+def skip_one(): # {{{
 	global skipped_time
 	skipped_time += g.skip_time
-	update ()
-	settings.gameobject._reschedule_timers ()
+	update()
+	settings.gameobject._reschedule_timers()
 # }}}
 
-def skip_more (): # {{{
+def skip_more(): # {{{
 	global skipped_time
 	while current_msg is None:
 		extra_time = g.skip_time
 		if extra_time == 0:
 			break
 		skipped_time += extra_time
-		update ()
-		settings.gameobject._reschedule_timers ()
-		while gtk.events_pending ():
-			gtk.main_iteration (False)
+		update()
+		settings.gameobject._reschedule_timers()
+		while gtk.events_pending():
+			gtk.main_iteration(False)
 # }}}
 # }}}
 
@@ -537,67 +564,71 @@ queue = []
 current_msg = None
 current_data  = None
 wherigo._script = None
-cbs = CB ()
+cbs = CB()
+wherigo._cb = cbs
 # }}}
 
 # Schedule periodic updates. {{{
-device = GpsPoller ()
-def update ():
-	fp = settings.map.get_force_position ()
+device = GpsPoller()
+def update():
+	fp = settings.map.get_force_position()
 	if fp is not None:
-		p = Position (fp[0], None, fp[1], None, wherigo.Player.ObjectLocation.altitude () if wherigo.Player and wherigo.Player.ObjectLocation else 0, None, 0, None, 0, 0, 0, 0, 0, 0)
+		p = Position(fp[0], None, fp[1], None, wherigo.Player.ObjectLocation.altitude() if wherigo.Player and wherigo.Player.ObjectLocation else 0, None, 0, None, 0, 0, 0, 0, 0, 0)
 		g.position_locked = True
 	elif not g.position_locked:
-		p = device.get_pos ()
+		p = device.get_pos()
 	else:
 		p = None
 	if settings.gameobject:
-		update_all = settings.gameobject._update (p, skipped_time + time.time ())
-		inside = wherigo.Player.InsideOfZones.list ()
+		update_all = settings.gameobject._update(p, skipped_time + time.time())
+		inside = wherigo.Player.InsideOfZones.list()
 	else:
 		update_all = False
 		inside = []
 	if p:
-		g.lat_label = make_str (p.lat if p.lat else 0, 'N', 'S')
-		g.lon_label = make_str (p.lon if p.lon else 0, 'E', 'W')
+		g.lat_label = make_str(p.lat if p.lat else 0, 'N', 'S')
+		g.lon_label = make_str(p.lon if p.lon else 0, 'E', 'W')
 		g.alt_label = '%d m' % (p.alt if p.alt else 0)
 		position.markers[0] = [(p.lat, p.lon, p.epy, p.epx), [True, True]]
 	else:
 		position.markers[0][1][1] = False
 	if update_all or settings.debug:
-		cbs.update ()
-	cbs.update_stats ()
-	settings.map.update ()
-	if len (inside) == 0:
+		cbs.update()
+	cbs.update_stats()
+	settings.map.update()
+	if len(inside) == 0:
 		instr = 'You are not in a zone'
-	elif len (inside) == 1:
+	elif len(inside) == 1:
 		instr = "You are in the zone '%s'" % inside[0].Name
 	else:
-		instr = 'You are in the zones ' + ', '.join (["'%s'" % i.Name for i in inside[:-1]]) + " and '" + inside[-1].Name + "'"
+		instr = 'You are in the zones ' + ', '.join(["'%s'" % i.Name for i in inside[:-1]]) + " and '" + inside[-1].Name + "'"
 	g.inside_label = instr
 	return True
-gtk.timeout_add (1000, update)
+gtk.timeout_add(1000, update)
 # }}}
 
 # Set up map. {{{
-settings.map = Map.Map (47.1, -88.5)
-settings.map.set_zoom (100000)	# pixels per degree. 1 degree is about 100 km.
-settings.map.grab_focus ()
+settings.map = Map.Map(47.1, -88.5)
+if args.map is not None:
+	settings.map.add_layer(Map.MapLayer(settings.map, args.map))
+settings.map.set_zoom(100000)	# pixels per degree. 1 degree is about 100 km.
+settings.map.grab_focus()
 # }}}
-g = gui.Gui (	# {{{
-		events = {
+g = gui.Gui(	# {{{
+		events = wfapi.events({
 			'command': command,
 			'file_open_response': open_cb,
 			'file_save_response': save_cb,
 			'file_new': file_new,
+			'file_search': file_search,
 			'file_open': file_open,
 			'file_save': file_save,
 			'file_quit': file_quit,
 			'help_about': help_about,
 			'skip_one': skip_one,
 			'skip_more': skip_more,
-			},
-		inputs = (
+			}),
+		inputs = wfapi.inputs() + (
 			'taskcolor', 'historycolor', 'inventorycolor', 'locationcolor',
 			'charactercolor', 'objectcolor', 'messagecolor', 'logcolor',
 			'positioncolor', 'gridcolor', 'startcolor', 'customcolor',
@@ -605,7 +636,7 @@ g = gui.Gui (	# {{{
 			'save_page', 'skip_time',
 			'position_locked',
 		),
-		outputs = (
+		outputs = wfapi.outputs() + (
 			'show_opendialog', 'show_savedialog',
 			'show_debug', 'update_timer',
 			'focus_location', 'select_location', 'update_location',
@@ -615,7 +646,8 @@ g = gui.Gui (	# {{{
 			'message_show', 'message_set', 'focus_message',
 			'history_add',
 			'lat_label', 'lon_label', 'alt_label', 'inside_label',
-			'statusbar'
+			'statusbar',
+			'show_search',
 		),
 		widgets = widgets.widgets,
 		gtk = {'map': settings.map},
@@ -624,18 +656,37 @@ if settings.debug:
 	g.show_debug = True
 # }}}
 # Add map layers. {{{
-if args.map is not None:
-	settings.map.add_layer (Map.MapLayer (settings.map, args.map))
-settings.map.add_layer (Map.GridLayer (settings.map, g.gridcolor))
-position = Map.PositionLayer (settings.map, g.positioncolor)
-position.markers = [[(0, 0, None, None), [False, True]]]
-settings.map.add_layer (position)
-startlayer = Map.MarkerLayer (settings.map, g.startcolor)
-settings.map.add_layer (startlayer)
-customlayer = Map.MarkerLayer (settings.map, g.customcolor)
-settings.map.add_layer (customlayer)
+settings.map.add_layer(Map.GridLayer(settings.map, g.gridcolor))
+position = Map.PositionLayer(settings.map, g.positioncolor)
+position.markers = [[(50, 0, None, None), [False, True]]]
+settings.map.add_layer(position)
+startlayer = Map.MarkerLayer(settings.map, g.startcolor)
+settings.map.add_layer(startlayer)
+customlayer = Map.MarkerLayer(settings.map, g.customcolor)
+settings.map.add_layer(customlayer)
 # }}}
-file_new (None)
+
+# Set up config. {{{
+config = {}
+try:
+	name = os.getlogin().capitalize()
+except:
+	# We're on Windows, or something else is wrong.
+	# Don't bother fixing anything, just use a default.
+	name = 'Monty Python'
+for key, default in (('Id', 0), ('URL', 'about:blank'), ('Device', 'PocketPC'), ('PlayerName', name), ('LogLevel', wherigo.LOGCARTRIDGE), ('env_Platform', 'xmarksthespot'), ('env_CartFolder', '/whatever'), ('env_SyncFolder', '/whatever'), ('env_LogFolder', '/whatever'), ('env_PathSep', '/'), ('env_DeviceID', 'Python'), ('env_Version', '2.11-compatible'), ('env_Downloaded', '0'), ('env_CartFilename', None), ('env_Device', None)):
+	env = os.getenv('XMTS_' + key.upper())
+	if env is not None:
+		config[key] = env
+	elif hasattr(g, 'config_' + key):
+		config[key] = getattr(g, 'config_' + key)
+	else:
+		config[key] = default
+if config['env_Device'] is None:
+	config['env_Device'] = config['Device']
+forced_cartfilename = config['env_CartFilename']
+# }}}
+file_new(None)
 if gwcfile:
-	open_cartridge (gwcfile)
-g ()
+	open_cartridge(gwcfile)
+g()

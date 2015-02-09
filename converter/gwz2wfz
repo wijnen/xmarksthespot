@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+# vim: set foldmethod=marker :
 
 # gwz2wfz - convert old style gwz and gwc cartridges into wfz.
-# Copyright 2012 Bas Wijnen <wijnen@debian.org>
+# Copyright 2012-2015 Bas Wijnen <wijnen@debian.org> {{{
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -15,7 +16,9 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# }}}
 
+# Imports. {{{
 import argparse
 import os
 import zipfile
@@ -24,8 +27,9 @@ import sys
 import re
 import lua
 import wherigo
+# }}}
 
-# Reverse substitutions (in reverse order):
+# List of reverse substitutions (in reverse order): {{{
 # '&amp;' -> '&'		"&" with "&amp;"
 # '&lt;' -> '<'			"<" with "&lt;"
 # '&gt;' -> '>'			">" with "&gt;"
@@ -34,27 +38,143 @@ import wherigo
 # 				"\r\n" or "\n\r" with "\n"
 # '%s*<BR>%s*' -> '\n'		"\r" or "\n" with "<BR>\n"
 
-# Do this before displaying in Dialog, ShowStatusText, LogMessage, MessageBox and when creating any ZObject description.
+# Do this before displaying in Dialog, ShowStatusText, LogMessage, MessageBox and when creating any ZObject Name, Description or Text.
+# }}}
 
+# Constants. {{{
+lua_magic = b'\x1bLua'	# Magic number to detect a compiled lua file.
+gwc_magic = b'\x02\x0aCART\x00'	# Magic number to detect a gwc file.
+# Lua template for (mostly) header code.  {{{
 template = '''\
+-- Generated code to make old-style code usable on new engine.
 require 'Wherigo'
--- Generated code to make media usable by old-style code.
-Wherigo.ZMedia_list = {%s}
+_converter = {}
+_converter.old = {}
+_converter.ZMedia_list = {%s}
+_converter.old_ZMedia = Wherigo.ZMedia
 function Wherigo.ZMedia(...)
-	return table.remove (Wherigo.ZMedia_list, 1)
+	return table.remove(_converter.ZMedia_list, 1)
 end
 -- Generated wrapper to use old newline style.
-function Wherigo.deconvert_nl(str)
+function _converter.deconvert_nl(str)
+	if type(str) ~= 'string' then
+		return str
+	end
 	return str:gsub('%%s*<BR>%%s*', '\\n'):gsub('%%s*&nbsp;%%s*', '   '):gsub('&gt;', '>'):gsub('&lt;', '<'):gsub('&amp;', '&')
 end
--- TODO: The above function should also be used in Dialog and when setting the Description of a ZObject.
-Wherigo.orig_MessageBox = Wherigo.MessageBox
+function _converter.wrap_object(obj)
+	local ret = {
+		_real_obj = obj,
+		_pristine = {},
+		MoveTo = function(table, target)
+			table._real_obj:MoveTo(target and target._real_obj)
+			table._pristine.Container = target
+		end,
+		Contains = function(table, target)
+			return table._real_obj:Contains(target._real_obj)
+		end
+	}
+	ret._pristine.Commands = { _parent = ret, _commands = {} }
+	setmetatable(ret._pristine.Commands, {
+		__index = function(table, key)
+			return table._commands[key]
+		end,
+		__newindex = function(table, key, value)
+			table._commands[key] = value
+			table._parent._real_obj.Commands[key] = value._real_obj
+		end
+	})
+	setmetatable(ret, {
+		-- Don't care about all operations which aren't supported on ZObjects anyway.
+		__index = function(table, key)
+			if table._pristine[key] ~= nil then
+				return table._pristine[key]
+			end
+			return table._real_obj[key]
+		end,
+		__newindex = function(table, key, value)
+			if key == 'Container' then
+				table:MoveTo(value)
+				return
+			end
+			if key == 'Commands' then
+				for k, v in pairs(value) do
+					table._pristine.Commands[k] = v
+				end
+				return
+			end
+			if key == 'Description' or key == 'Name' or key == 'Text' then
+				table._pristine[key] = value
+				value = _converter.deconvert_nl(value)
+			end
+			table._real_obj[key] = value
+		end
+	})
+	return ret
+end
+function _converter.wrap_type(obj)
+	_converter.old[obj] = Wherigo[obj]
+	Wherigo[obj] = {}
+	setmetatable(Wherigo[obj], {
+		__call = function(table, arg)
+			local ret = _converter.wrap_object(_converter.old[obj](_converter.cartridge._real_obj))
+			if arg == nil or arg == _converter.cartridge then
+				return ret
+			end
+			-- Use assignment instead of construction, because that is redirected to conversion code.
+			for k, v in pairs(arg) do
+				if k ~= 'Cartridge' then
+					ret[k] = v
+				end
+			end
+			return ret
+		end
+	})
+	Wherigo[obj].made = function(self, instance)
+		return _converter.orig_type(instance) == 'table' and _converter.old[obj]:made(instance._real_obj)
+	end
+end
+_converter.wrap_type('ZCommand')
+_converter.wrap_type('ZTimer')
+_converter.wrap_type('ZInput')
+_converter.wrap_type('ZItem')
+_converter.wrap_type('Zone')
+_converter.wrap_type('ZTask')
+Wherigo.ZCharacter = Wherigo.ZItem
+_converter.orig_type = type
+function type(obj)
+	if _converter.orig_type(obj) ~= 'table' or obj._real_obj == nil then
+		return _converter.orig_type(obj)
+	end
+	return _converter.orig_type(obj._real_obj)
+end
+_converter.orig_MessageBox = Wherigo.MessageBox
 function Wherigo.MessageBox(table)
-	return Wherigo.orig_MessageBox{Text=Wherigo.deconvert_nl(table.Text), Media=table.Media, Buttons=table.Buttons, Callback=table.Callback}
+	return _converter.orig_MessageBox{Text=_converter.deconvert_nl(table.Text), Media=table.Media, Buttons=table.Buttons, Callback=table.Callback}
 end
+_converter.orig_Dialog = Wherigo.Dialog
+function Wherigo.Dialog(table)
+	local t1 = {}
+	local k1, v1
+	for k1, v1 in pairs(table) do
+		local t2 = {}
+		local k2, v2
+		for k2, v2 in pairs(v1) do
+			if k2 == 'Text' then
+				t2[k2] = _converter.deconvert_nl(v2)
+			else
+				t2[k2] = v2
+			end
+		end
+		t1[k1] = t2
+	end
+	return _converter.orig_Dialog(t2)
+end
+_converter.orig_ShowStatusText = Wherigo.ShowStatusText
 function Wherigo.ShowStatusText(text)
-	return Wherigo.orig_ShowStatusText(Wherigo.deconvert_nl(text))
+	return _converter.orig_ShowStatusText(_converter.deconvert_nl(text))
 end
+_converter.orig_LogMessage = Wherigo.LogMessage
 function Wherigo.LogMessage(text, level)
 	if level == nil then
 		level = text.Level
@@ -62,169 +182,241 @@ function Wherigo.LogMessage(text, level)
 			text = text.Text
 		end
 	end
-	return Wherigo.orig_LogMessage(Wherigo.deconvert_nl(text), level)
+	return _converter.orig_LogMessage(_converter.deconvert_nl(text), level)
 end
-return assert(loadstring(%s))()
+function Wherigo.ZCartridge()
+	return _converter.cartridge
+end
+_converter.orig_GetInput = Wherigo.GetInput
+function Wherigo.GetInput(obj)
+	_converter.orig_GetInput(obj._real_obj)
+end
+_converter.orig_show = Wherigo.ShowScreen
+function Wherigo.ShowScreen(screen, item)
+	return _converter.orig_show(screen, item and item._real_obj)
+end
+_converter.orig_IsPointInZone = Wherigo.IsPointInZone
+function Wherigo.IsPointInZone(point, zone)
+	return _converter.orig_IsPointInZone(point, zone._real_obj)
+end
+_converter.orig_VectorToZone = Wherigo.VectorToZone
+function Wherigo.VectorToZone(point, zone)
+	return _converter.orig_VectorToZone(point, zone._real_obj)
+end
+_converter.cartridge = _converter.wrap_object(%s)
+_converter.code = assert(loadstring(%s))
+_converter.completion = '%s'
+function _converter.cartridge:OnStart()
+	Wherigo.Player = _converter.wrap_object(Wherigo.Player)
+	Wherigo.Player.CompletionCode = _converter.completion
+	_converter.cartridge.OnStart = nil
+	_converter.cartridge.OnResume = nil
+	_converter.code()
+	_converter.cartridge:OnStart(_converter.cartridge)
+end
+function _converter.cartridge:OnResume()
+	Wherigo.Player = _converter.wrap_object(Wherigo.Player)
+	Wherigo.Player.CompletionCode = _converter.completion
+	_converter.cartridge.OnStart = nil
+	_converter.cartridge.OnResume = nil
+	_converter.code()
+	_converter.cartridge:OnResume(_converter.cartridge)
+end
 '''
+# }}}
+# }}}
 
-lua_magic = b'\x1bLua'	# Magic number to detect a compiled lua file.
-gwc_magic = b'\x02\x0aCART\x00'	# Magic number to detect a gwc file.
-
-class ZMedia (wherigo.ZObject):
+class ZMedia(wherigo.ZObject): # {{{
+	'''Class for ZMedia Lua objects.
+	Keeps track of order of construction.
+	Is used to generate list of media files in wfi, and in Media/ in the wfz file.
+	'''
 	_list = []
 	@wherigo._table_arg
-	def __init__ (self, Cartridge, Container = None, Active = None, Commands = None, Description = None, Icon = None, Media = None, Name = None, ObjectLocation = None, Visible = None, **ka):
-		if len (ka) > 0:
-			sys.stderr.write ('Warning: unknown commands given to ZMedia: %s\n' % ka)
-		wherigo.ZObject.__init__ (self, {'Cartridge': Cartridge, 'Container': Container, 'Active': Active, 'Commands': Commands, 'Description': Description, 'Icon': Icon, 'Media': Media, 'Name': Name, 'ObjectLocation': ObjectLocation, 'Visible': Visible})
-		self._index = len (ZMedia._list)
-		ZMedia._list.append (self)
+	def __init__(self, Cartridge, Container = None, Active = None, Commands = None, Description = None, Icon = None, Media = None, Name = None, ObjectLocation = None, Visible = None, **ka):
+		if len(ka) > 0:
+			sys.stderr.write('Warning: unknown commands given to ZMedia: %s\n' % ka)
+		wherigo.ZObject.__init__(self, {'Cartridge': Cartridge, 'Container': Container, 'Active': Active, 'Commands': Commands, 'Description': Description, 'Icon': Icon, 'Media': Media, 'Name': Name, 'ObjectLocation': ObjectLocation, 'Visible': Visible})
+		self._index = len(ZMedia._list)
+		ZMedia._list.append(self)
+# }}}
 
-class Converter:
-	def __init__ (self, name, file, gwc, copyright, license):
-		self.name = name
+class Converter: # {{{
+	# Internal methods. {{{
+	def __init__(self, name, file, gwc, copyright, license): # {{{
+		self.names = set()
+		self.name = self.make_name(name + os.extsep + 'wfz')	# Make it look like a filename so make_name works right.
 		self.copyright = copyright
 		self.license = license
 		self.gwc = gwc
 		if gwc:
 			self.file = file
-			magic = file.read (len (gwc_magic))
+			magic = file.read(len(gwc_magic))
 			if magic != gwc_magic:
-				sys.stderr.write ('This is not a gwc file.\n')
-				sys.exit (1)
-			num = self.read_short (file)
+				sys.stderr.write('This is not a gwc file.\n')
+				sys.exit(1)
+			num = self.read_short(file)
 			self.file_id = [None] * num
 			self.offset = [None] * num
-			for i in range (num):
-				self.file_id[i] = self.read_short (file)
-				self.offset[i] = self.read_int (file)
-			header_size = self.read_int (file)
-			header = file.read (header_size)
-			lua_size = self.read_int (file)
-			orig_lua = file.read (lua_size)
-			self.pos = len (gwc_magic) + 2 + num * 6 + 4 + header_size + 4 + lua_size
+			for i in range(num):
+				self.file_id[i] = self.read_short(file)
+				self.offset[i] = self.read_int(file)
+			header_size = self.read_int(file)
+			header = file.read(header_size)
+			lua_size = self.read_int(file)
+			orig_lua = file.read(lua_size)
+			self.pos = len(gwc_magic) + 2 + num * 6 + 4 + header_size + 4 + lua_size
 		else:
-			self.gwz = zipfile.ZipFile (file, 'r')
-			self.info = self.gwz.infolist ()
-			luafiles = [x for x in self.info if x.filename.endswith ('.lua')]
-			if len (luafiles) != 1:
-				sys.stderr.write ('Error: file does not contain exactly one lua file\n')
-				sys.exit (1)
-			orig_lua = self.gwz.open (luafiles[0]).read ()
-			self.info.remove (luafiles[0])
-		if orig_lua.startswith (lua_magic):
+			self.gwz = zipfile.ZipFile(file, 'r')
+			self.info = self.gwz.infolist()
+			luafiles = [x for x in self.info if x.filename.endswith('.lua')]
+			if len(luafiles) != 1:
+				sys.stderr.write('Error: file does not contain exactly one lua file\n')
+				sys.exit(1)
+			orig_lua = self.gwz.open(luafiles[0]).read()
+			self.info.remove(luafiles[0])
+		if orig_lua.startswith(lua_magic):
 			# This is already compiled, so we can't do any replacements.
 			self.lua = orig_lua
 		else:
-			self.lua = self.mangle_string (orig_lua)
-			if self.lua.startswith (b'\xef\xbb\xbf'):
-				sys.stderr.write ('Warning: lua source started with BOM.\n')
+			self.lua = self.mangle_string(orig_lua)
+			if self.lua.startswith(b'\xef\xbb\xbf'):
+				sys.stderr.write('Warning: lua source started with BOM.\n')
 				self.lua = self.lua[3:]
-		self.parser = lua.lua ()
+		self.parser = lua.lua()
 		# Create this object; it is required for old style cartridges, but not for the new ones that wherigo.py is meant to be used with.
 		wherigo.ZMedia = ZMedia
 		wherigo._script = self.parser
-		self.parser.module ('Wherigo', wherigo)
-		self.parser.run ('', 'Env', {
-				'Platform': 'converter',
-				'CartFolder': '/whatever',
-				'SyncFolder': '/whatever',
-				'LogFolder': '/whatever',
-				'PathSep': '/',
-				'DeviceID': 'Python',
-				'Version': '1.0',
-				'Downloaded': 0,
-				'CartFilename': self.name,
-				'Device': 'PocketPC'
+		self.parser.module('Wherigo', wherigo)
+		self.parser.run('', 'Env', {
+				b'Platform': b'converter',
+				b'CartFolder': b'/whatever',
+				b'SyncFolder': b'/whatever',
+				b'LogFolder': b'/whatever',
+				b'PathSep': b'/',
+				b'DeviceID': b'Python',
+				b'Version': b'1.0',
+				b'Downloaded': 0,
+				b'CartFilename': self.name,
+				b'Device': b'PocketPC'
 			}, name = 'setting Env')
-		self.cart = self.parser.run (self.lua, name = 'running lua code')[0]
+		self.cart = self.parser.run(b"require 'Wherigo'\nWherigo.ZCharacter = Wherigo.ZItem\n" + self.lua, name = 'running lua code')[0]
 
 		self.wfi = 'Format: 1.0\n'
-		self.wfi += self.get ('Name', 'Description', default = False)
-		self.wfi += self.get ('Version')
-		self.wfi += self.get ('Author')
-		self.wfi += self.get ('Company')
-		self.wfi += 'Copyright: %s\n' % self.copyright
-		self.wfi += 'License: %s\n' % self.license
+		self.wfi += self.get('ZCartridge', 'Description', value = '_%s_cartridge' % self.name)
+		self.wfi += self.get('Version')
+		self.wfi += self.get('Author')
+		self.wfi += self.get('Company')
+		self.wfi += self.get('Copyright', value = self.copyright)
+		self.wfi += self.get('License', value = self.license)
 
-		self.wfi += self.get ('CreateDate')
-		self.wfi += self.get ('UpdateDate')
+		self.wfi += self.get('CreateDate')
+		self.wfi += self.get('UpdateDate')
 
-		self.wfi += self.get ('Activity', default = False)
-		self.media = self.get_media ('Media')
-		self.icon = self.get_media ('Icon')
+		self.wfi += self.get('Activity', default = False)
+		self.media = self.get_media('Media')
+		self.icon = self.get_media('Icon')
 		if self.cart.StartingLocation == wherigo.INVALID_ZONEPOINT:
 			val = 'None'
 		else:
-			val = '%f %f %f' % (self.cart.StartingLocation.latitude, self.cart.StartingLocation.longitude, self.cart.StartingLocation.altitude ())
-		self.wfi += self.get ('StartingLocation', 'StartingLocationDescription', value = val, default = False)
+			val = '%f %f %f' % (self.cart.StartingLocation.latitude, self.cart.StartingLocation.longitude, self.cart.StartingLocation.altitude())
+		self.wfi += self.get('StartingLocation', 'StartingLocationDescription', value = val, default = False)
 
-		self.wfi += self.get ('TargetDevice')
-		self.wfi += self.get ('TargetDeviceVersion')
-		self.wfi += self.get ('BuilderVersion')
-	def mangle_string (self, orig):
+		self.wfi += self.get('TargetDevice')
+		self.wfi += self.get('TargetDeviceVersion')
+		self.wfi += self.get('BuilderVersion')
+	# }}}
+	def mangle_string(self, orig): # {{{
 		ret = b''
-		start_re = re.compile (b'''"|'|\[(=*)\[''')
-		end_re1 = re.compile (b"""(?:[^\\']|\\.)*'""")
-		end_re2 = re.compile (b'''(?:[^\\"]|\\.)*"''')
+		start_re = re.compile(rb'''--|"|'|\[(=*)\[''')
+		comment_re = re.compile(rb'''\[(=*)\[''')
+		end_re1 = re.compile(rb"""(?:[^\']|\.)*'""")
+		end_re2 = re.compile(rb'''(?:[^\"]|\.)*"''')
+		escape_re = re.compile(rb'''\\.''')
+		def find_end(end_re, orig): # {{{
+			pos = 0
+			while True:
+				end = end_re.search(orig, pos)
+				escape = escape_re.search(orig, pos)
+				if end is None:
+					sys.stderr.write('Error: unterminated string.\n')
+					sys.exit(1)
+				if escape and escape.start() < end.end():
+					pos = escape.end()
+					continue
+				end = end.end() - 1
+				return end
+		# }}}
 		while True:
-			pos = start_re.search (orig)
+			pos = start_re.search(orig)
 			if pos is None:
 				return ret + orig
-			ret += orig[:pos.end ()]
-			orig = orig[pos.end ():]
-			#print (repr (ret[-10:]), '...', repr (orig[:10]), '/', pos.group (0))
-			if pos.group (0) == b"'":
-				end = end_re1.search (orig)
-				if end is None:
-					sys.stderr.write ('Error: unterminated string.\n')
-					sys.exit (1)
-				end = end.end () - 1
-			elif pos.group (0) == b'"':
-				end = end_re2.search (orig)
-				if end is None:
-					sys.stderr.write ('Error: unterminated string.\n')
-					sys.exit (1)
-				end = end.end () - 1
+			ret += orig[:pos.end()]
+			orig = orig[pos.end():]
+			#print(repr(ret[-10:]), '...', repr(orig[:10]), '/', pos.group(0))
+			if pos.group(0) == b'--':
+				if comment_re.match(orig[2:]):
+					ret += orig[:2]
+					orig = orig[2:]
+					# Fill up members for the long string and fall through to the handling below.
+					pos = start_re.match(orig)
+				else:
+					# Short comment.
+					end = orig.find(b'\n')
+					if end < 0:
+						sys.stderr.write('Warning: no newline at end of file, and last line ends in a short comment.\n')
+						ret += orig
+						orig = ''
+					else:
+						ret += orig[:end + 1]
+						orig = orig[end + 1:]
+					continue
+			if pos.group(0) == b"'":
+				end = find_end(end_re1, orig)
+			elif pos.group(0) == b'"':
+				end = find_end(end_re2, orig)
 			else:
-				end = orig.find (b']' + pos.group (1) + b']')
+				end = orig.find(b']' + pos.group(1) + b']')
 				if end < 0:
-					sys.stderr.write ('Error: unmatched long open bracket.\n')
-					sys.exit (1)
-			#print (orig[:end])
-			ret += self.mangle (orig[:end + 1])
+					sys.stderr.write('Error: unmatched long open bracket.\n')
+					sys.exit(1)
+			#print(orig[:end])
+			ret += self.mangle(orig[:end + 1])
 			orig = orig[end + 1:]
-	def get (self, name, longname = None, value = None, default = None):
+	# }}}
+	def get(self, name, longname = None, value = None, default = None): # {{{
 		ret = ''
 		if value is None:
-			if hasattr (self.cart, name):
+			if hasattr(self.cart, name) and getattr(self.cart, name):
 				if self.gwc:
-					ret += name + ': ' + getattr (self.cart, name) + '\n'
+					ret += name + ': ' + getattr(self.cart, name) + '\n'
 				else:
-					ret += name + ': ' + self.unmangle (getattr (self.cart, name)) + '\n'
+					ret += name + ': ' + self.unmangle(getattr(self.cart, name)) + '\n'
 			elif default is False:
-				sys.stderr.write ("Cartridge didn't define required attribute %s\n" % name)
-				sys.exit (1)
+				sys.stderr.write("Cartridge didn't define required attribute %s\n" % name)
+				sys.exit(1)
 			else:
 				return ''
 		else:
 			ret += name + ': ' + value + '\n'
-		if longname is not None and hasattr (self.cart, longname):
+		if longname is not None and hasattr(self.cart, longname):
 			if self.gwc:
-				val = getattr (self.cart, longname)
+				val = getattr(self.cart, longname)
 			else:
-				val = self.unmangle (getattr (self.cart, longname))
-			if val.strip () != '':
-				ret += '\t' + '\n\t'.join (getattr (self.cart, longname).split ('\n')) + '\n'
+				val = self.unmangle(getattr(self.cart, longname))
+			if val.strip() != '':
+				ret += '\t' + '\n\t'.join(getattr(self.cart, longname).split('\n')) + '\n'
 		return ret
-	def get_media (self, name):
-		if not hasattr (self.cart, name):
+	# }}}
+	def get_media(self, name): # {{{
+		if not hasattr(self.cart, name):
 			return ''
-		obj = getattr (self.cart, name)
+		obj = getattr(self.cart, name)
 		if obj is None:
 			return None
 		return ZMedia._list[obj._index]
-	def mangle (self, string):
+	# }}}
+	def mangle(self, string): # {{{
 		# Substitutions (in this order):
 		# "&" with "&amp;"
 		# "<" with "&lt;"
@@ -233,106 +425,130 @@ class Converter:
 		# two and more spaces with "&nbsp;"
 		# "\r\n" or "\n\r" with "\n"
 		# "\r" or "\n" with "<BR>\n"
-		string = string.replace (b'&', b'&amp;')
-		string = string.replace (b'<', b'&lt;')
-		string = string.replace (b'>', b'&gt;')
-		string = string.replace (b'\t', b'   ')
-		string = b'&nbsp;'.join (re.split (b'  +', string))
-		string = b'\n'.join (re.split (b'\n\r|\r\n', string))
-		string = b'<BR>\n'.join (re.split (b'\n|\r', string))
+		string = string.replace(b'&', b'&amp;')
+		string = string.replace(b'<', b'&lt;')
+		string = string.replace(b'>', b'&gt;')
+		string = string.replace(b'\t', b'   ')
+		string = b'&nbsp;'.join(re.split(b'  +', string))
+		string = b'\n'.join(re.split(b'\n\r|\r\n', string))
+		string = b'<BR>\n'.join(re.split(b'\n|\r', string))
 		return string
-	def unmangle (self, string):
-		string = '\n'.join (re.split (r'\s*<BR>\s*', string))
-		string = '   '.join (re.split (r'\s*&nbsp;\s*', string))
-		return string.replace ('&gt;', '>').replace ('&lt;', '<').replace ('&amp;', '&')
-	def as_string (self, string):
+	# }}}
+	def unmangle(self, string): # {{{
+		string = '\n'.join(re.split(r'\s*<BR>\s*', string))
+		string = '   '.join(re.split(r'\s*&nbsp;\s*', string))
+		return string.replace('&gt;', '>').replace('&lt;', '<').replace('&amp;', '&')
+	# }}}
+	def as_string(self, string): # {{{
 		level = 0
 		while True:
-			if (b']' + b'=' * level + b']') not in string:
+			if(b']' + b'=' * level + b']') not in string:
 				return b'([' + b'=' * level + b'[' + string + b']' + b'=' * level + b'])'
 			level += 1
-	def as_id (self, string):
-		ret = '_'.join (re.split ('[^a-zA-Z0-9]', string))
+	# }}}
+	def as_id(self, string): # {{{
+		ret = '_'.join(re.split('[^a-zA-Z0-9]', string))
 		if ret == '' or '0' <= ret[0] <= '9':
 			ret = '_' + ret
 		return ret
-	def make_name (self, name):
-		name = self.as_id (os.path.splitext (name)[0])
+	# }}}
+	def make_name(self, name): # {{{
+		name = self.as_id(os.path.splitext(name)[0])
 		n = name
 		i = 0
 		while n in self.names:
 			n = '%s%d' % (name, i)
 			i += 1
-		self.names.add (n)
+		self.names.add(n)
 		return n
-	def write_target (self, file):
-		self.names = set ()
-		with zipfile.ZipFile (file, 'w') as wfz:
+	# }}}
+	def read_short(self, f): # {{{
+		return struct.unpack('<H', f.read(2))[0]
+	# }}}
+	def read_int(self, f): # {{{
+		return struct.unpack('<I', f.read(4))[0]
+	# }}}
+	# }}}
+	def write_target(self, file, completion_code = '0123456789abcdef'): # {{{
+		with zipfile.ZipFile(file, 'w') as wfz:
+			# Build media list for wfi. {{{
+			media_wfi = ''
 			for m in ZMedia._list:
+				this_wfi = ''
 				m._name = None
-				if not hasattr (m, 'Resources') or len (m.Resources.list ()) == 0:
-					sys.stderr.write ('Warning: no files specified for Media %d\n' % m._index)
-					continue
-				for f in m.Resources.list ():
-					if m._name is None:
-						m._name = self.make_name (os.path.basename (f['Filename']))
-						m._filename = f['Filename']
-						self.wfi += 'Media: ' + m._name + '\n'
-					self.wfi += 'File: ' + f['Filename'] + '\n'
-					if 'Directives' in f:
-						for d in f['Directives'].list ():
-							self.wfi += '\t%s\n' % d
+				if not hasattr(m, 'Resources') or len(m.Resources.list()) == 0:
+					sys.stderr.write('Warning: no files specified for Media %d\n' % m._index)
+				else:
+					for f in m.Resources.list():
+						name = self.make_name(os.path.basename(f['Filename']))
+						filename = self.as_id(name) + os.path.splitext(f['Filename'])[1]
+						if m._name is None:
+							m._name = name
+							m._filename = filename
+						this_wfi += 'File: ' + filename + '\n'
+						if 'Directives' in f:
+							for d in f['Directives'].list():
+								this_wfi += '\t%s\n' % d
 				if m._name is None:
-					m._name = self.make_name ('unknown')
+					m._name = self.make_name('unknown')
+					m._filename = self.as_id(m._name)
+				media_wfi += 'ZMedia: ' + m._name + '\n' + this_wfi
+			# }}}
+			# Add poster, icon and media list to wfi. {{{
 			if self.media:
-				self.wfi += 'Poster: ' + self.media._name + '\n'
+				self.wfi += 'Media: ' + self.media._name + '\n'
 			if self.icon:
 				self.wfi += 'Icon: ' + self.icon._name + '\n'
-			media = ',\n'.join (['Wherigo.Media.%s' % m._name for m in ZMedia._list])
-			wfz.writestr (os.path.join (self.name, '_cartridge.lua'), template % (media, lua.makestr (self.as_string (self.lua))))
-			wfz.writestr (os.path.join (self.name, '_cartridge.wfi'), self.wfi)
+			self.wfi += media_wfi
+			# }}}
+			# Write Cartridge.* {{{
+			media = ',\n'.join(['Wherigo.Media.%s' % m._name for m in ZMedia._list])
+			wfz.writestr(os.path.join(self.name, 'Cartridge.lua'), template % (media, '_%s_cartridge' % self.name, lua.makestr(self.as_string(self.lua)), completion_code))
+			wfz.writestr(os.path.join(self.name, 'Cartridge.wfi'), self.wfi)
+			# }}}
+			# Write media files. {{{
 			if self.gwc:
-				files = zip (self.file_id, self.offset)
-				files.sort (key = lambda x: x[1])
+				files = zip(self.file_id, self.offset)
+				files.sort(key = lambda x: x[1])
 				for file_id, offset in files[1:]:
 					if offset < self.pos:
-						sys.stderr.write ('Error: gwc file has overlapping components.\n')
-						sys.exit (1)
+						sys.stderr.write('Error: gwc file has overlapping components.\n')
+						sys.exit(1)
 					if offset > self.pos:
-						self.file.read (offset - self.pos)
-					flag = self.file.read (1)
+						self.file.read(offset - self.pos)
+					flag = self.file.read(1)
 					if flag == '\0':
-						sys.stderr.write ('Info: file %d is not present in gwc; skipping.\n' % file_id)
+						sys.stderr.write('Info: file %d is not present in gwc; skipping.\n' % file_id)
 						self.pos = offset + 1
 						continue
-					self.read_int (self.file)
-					size = self.read_int (self.file)
-					info = os.path.join (self.name, 'Media', ZMedia._list[file_id - 1]._filename)
-					wfz.writestr (info, self.file.read (size))
+					self.read_int(self.file)
+					size = self.read_int(self.file)
+					info = os.path.join(self.name, 'Media', ZMedia._list[file_id - 1]._filename)
+					wfz.writestr(info, self.file.read(size))
 					self.pos = offset + 1 + 4 + 4 + size
 			else:
 				for info in self.info:
-					data = self.gwz.open (info, 'r').read ()
-					info.filename = os.path.join (self.name, 'Media', os.path.basename (info.filename))
-					wfz.writestr (info, data)
-	def read_short (self, f):
-		return struct.unpack ('<H', f.read (2))[0]
-	def read_int (self, f):
-		return struct.unpack ('<I', f.read (4))[0]
+					data = self.gwz.open(info, 'r').read()
+					base, ext = os.path.splitext(os.path.basename(info.filename))
+					info.filename = os.path.join(self.name, 'Media', self.as_id(base) + ext)
+					wfz.writestr(info, data)
+			# }}}
+	# }}}
+# }}}
 
-def main ():
-	a = argparse.ArgumentParser ()
-	a.add_argument ('--copyright', help = 'copyright statement', default = 'copyright holder is not known')
-	a.add_argument ('--license', help = 'license statement', default = 'license is not known')
-	a.add_argument ('--name', help = 'cartridge name (defaults basename of input)', default = None)
-	a.add_argument ('gwz_or_gwc', help = 'input cartridge filename (use - for standard input)')
-	a.add_argument ('--wfz', help = 'output cartridge filename (use - for standard output; default is the same as input, with extension wfz)', default = None)
-	a.add_argument ('--force', help = 'overwrite wfz file if it exists', action = 'store_true')
-	a.add_argument ('--gwc', help = 'force input to be treated as a gwc file', action = 'store_const', const = True, default = None)
-	a.add_argument ('--gwz', help = 'force input to be treated as a gwz file', action = 'store_const', const = False, dest = 'gwc', default = None)
-	args = a.parse_args ()
+def main(): # {{{
+	a = argparse.ArgumentParser()
+	a.add_argument('--copyright', help = 'copyright statement', default = 'copyright holder is not known')
+	a.add_argument('--license', help = 'license statement', default = 'license is not known')
+	a.add_argument('--name', help = 'cartridge name (defaults basename of input)', default = None)
+	a.add_argument('gwz_or_gwc', help = 'input cartridge filename (use - for standard input)')
+	a.add_argument('--wfz', help = 'output cartridge filename (use - for standard output; default is the same as input, with extension wfz)', default = None)
+	a.add_argument('--force', help = 'overwrite wfz file if it exists', action = 'store_true')
+	a.add_argument('--gwc', help = 'force input to be treated as a gwc file', action = 'store_const', const = True, default = None)
+	a.add_argument('--gwz', help = 'force input to be treated as a gwz file', action = 'store_const', const = False, dest = 'gwc', default = None)
+	args = a.parse_args()
 	if args.name is None:
-		name = os.path.splitext (os.path.basename (args.gwz_or_gwc))[0]
+		name = os.path.splitext(os.path.basename(args.gwz_or_gwc))[0]
 	else:
 		name = args.name
 	if args.gwz_or_gwc == '-':
@@ -344,25 +560,26 @@ def main ():
 		else:
 			ofname = args.wfz
 	else:
-		gwc = os.path.splitext (args.gwz_or_gwc)[1].lower () == (os.extsep + 'gwc').lower ()
-		f = open (args.gwz_or_gwc, 'rb')
+		gwc = os.path.splitext(args.gwz_or_gwc)[1].lower() == (os.extsep + 'gwc').lower()
+		f = open(args.gwz_or_gwc, 'rb')
 		if args.wfz is None:
-			ofname = os.path.splitext (os.path.basename (args.gwz_or_gwc))[0] + os.extsep + 'wfz'
+			ofname = os.path.splitext(os.path.basename(args.gwz_or_gwc))[0] + os.extsep + 'wfz'
 		elif args.wfz == '-':
 			of = sys.stdout
 			ofname = None
 		else:
 			ofname = args.wfz
 	if ofname is not None:
-		if os.path.exists (ofname):
-			sys.stderr.write ('Target wfz file already exists!\n')
+		if os.path.exists(ofname):
+			sys.stderr.write('Target wfz file already exists!\n')
 			if args.force:
-				sys.stderr.write ('Overwriting at your request.\n')
+				sys.stderr.write('Overwriting at your request.\n')
 			else:
-				sys.exit (1)
-		of = lambda: open (ofname, 'wb')	# Use lambda function to delay creating the file.
-	c = Converter (name, f, args.gwc if args.gwc is not None else gwc, args.copyright, args.license)
-	c.write_target (of ())
+				sys.exit(1)
+		of = lambda: open(ofname, 'wb')	# Use lambda function to delay creating the file.
+	c = Converter(name, f, args.gwc if args.gwc is not None else gwc, args.copyright, args.license)
+	c.write_target(of())
+# }}}
 
 if __name__ == '__main__':
-	main ()
+	main()

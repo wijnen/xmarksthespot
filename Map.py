@@ -20,6 +20,7 @@ import glib
 import math
 import sys
 import mapping
+import traceback
 
 metersperdegree = 1852. * 60
 
@@ -153,7 +154,7 @@ class Map (gtk.DrawingArea):
 			pos = (pos[0], pos[1], None, None)
 		#self.pos is the center of the image.
 		#self.zoom is the number of pixels per longitudinal degree.
-		# latitudinal number of pixels per degree is the value for the longitude of pos, it is used for the entire image.
+		# longitudinal number of pixels per degree is the value for the latitude of pos, it is used for the entire image.
 		# in y direction, the zoom is negative so higher numbers are at the top of the screen. The y direction is the latitude.
 		zoom = (-self.zoom, self.zoom * math.cos (math.radians (self.pos[0])))
 		fromcenter = [pos[i] - self.pos[i] for i in range (2)]
@@ -203,7 +204,7 @@ class Map (gtk.DrawingArea):
 		for l in self.layers:
 			l._realize (self.get_window ())
 	def expose (self, widget, event):
-		if not self.buffer or not self.gc:
+		if not self.buffer or not self.gc or self.update_handle is not None:
 			return True
 		self.get_window ().draw_drawable (self.gc, self.buffer, event.area[0], event.area[1], event.area[0], event.area[1], event.area[2], event.area[3])
 	def configure (self, widget, event):
@@ -333,17 +334,18 @@ class MapLayer (Layer):
 		if not self.mapping:
 			return
 		ul = self.map.position ((0, 0))
-		ways, nodes = self.mapping.get (self.map.pos, (ul[0] - self.map.pos[0], self.map.pos[1] - ul[1]), maxnodes = 500)
+		ways, nodes = self.mapping.get (self.map.pos, (ul[0] - self.map.pos[0], self.map.pos[1] - ul[1]), self.map.size, self.map.zoom, 3000)
 		for w in ways:
-			pixt = [(p[0], p[1]) for p in [self.map.pixel ((x.lat, x.lon)) for x in w[0].nodes]]
-			for rule in w[1]:
+			if len (w.rule) == 0:
+				continue
+			for rule in w.rule:
 				try:
 					if rule[0]:
-						self.map.buffer.draw_polygon (rule[1], True, pixt)
+						self.map.buffer.draw_polygon (rule[1], True, w.nodes)
 					else:
-						self.map.buffer.draw_lines (rule[1], pixt)
+						self.map.buffer.draw_lines (rule[1], w.nodes)
 				except:
-					print sys.exc_value
+					traceback.print_exc ()
 				
 
 class GridLayer (Layer):

@@ -1,4 +1,43 @@
 gtk
+	def name=Search page_list=page_list page=page resultsperpage=resultsperpage cartridge_name_valid=name_valid cartridge_name=cartridge_name coord_valid=coord_valid latitude=latitude longitude=longitude radius=radius play_anywhere_valid=play_anywhere_valid play_anywhere=play_anywhere open_source_valid=open_source_valid open_source=open_source search=search
+		Table columns=3
+			Label value=:Page left=:1
+			ComboBoxText content=page_list value=page
+
+			Label value=':Results per Page' left=:1
+			SpinButton value=resultsperpage:10 range=:1,100
+
+			CheckButton value=cartridge_name_valid
+				Label
+			'Name
+			Entry value=cartridge_name
+
+			CheckButton value=coord_valid
+				Label
+			'Latitude
+			SpinButton value=latitude increment=:.1,1 range=:-90,90
+
+			Label value=:Longitude left=:1
+			SpinButton value=longitude increment=:.1,1 range=:-180,180
+
+			Label value=:Radius left=:1
+			SpinButton value=radius increment=:1,10 range=:1,1000
+
+			CheckButton value=play_anywhere_valid
+				Label
+			'Play Anywhere
+			CheckButton value=play_anywhere
+				Label
+
+			CheckButton value=open_source_valid
+				Label
+			'Open Source
+			CheckButton value=open_source
+				Label
+
+			Button left=:0 right=:2 clicked=search
+				'Search
+
 	Setting name=taskcolor value=#0c0
 	Setting name=historycolor value=#888
 	Setting name=inventorycolor value=#c80
@@ -21,6 +60,7 @@ gtk
 				Menu title=File
 					MenuItem title=New action=file_new
 					MenuItem title=Open action=file_open
+					MenuItem title='Search WWW' action=file_search
 					MenuItem title=Save action=file_save
 					MenuItem title=Quit action=file_quit
 				Menu title=Help
@@ -35,10 +75,10 @@ gtk
 					Timers update=update_timer skip=skip_time
 				HPaned
 					Book button=command save_page=save_page
-						Locations set_page=focus_location select=select_location update=update_location
-						Inventory set_page=focus_inventory select=select_inventory update=update_inventory
-						Environment set_page=focus_environment select=select_environment update=update_environment
-						Tasks set_page=focus_tasks select=select_tasks update=update_task
+						Locations page=focus_location select=select_location update=update_location
+						Inventory page=focus_inventory select=select_inventory update=update_inventory
+						Environment page=focus_environment select=select_environment update=update_environment
+						Tasks page=focus_tasks select=select_tasks update=update_task
 						History add=history_add
 						Log
 						Message show=message_show set=message_set set_page=focus_message
@@ -55,3 +95,5 @@ gtk
 				CheckButton value=position_locked
 					'Lock position
 			Statusbar text=statusbar expand=:False
+	Window title=":Cartridge Search - X Marks the Spot" show=show_search:False
+		Search page_list=search_page_list page=search_page resultsperpage=search_resultsperpage cartridge_name_valid=search_name_valid cartridge_name=search_name coord_valid=search_coord_valid latitude=search_latitude longitude=search_longitude radius=search_radius play_anywhere_valid=search_play_anywhere_valid play_anywhere=search_play_anywhere open_source_valid=search_open_source_valid open_source=search_open_source search=search

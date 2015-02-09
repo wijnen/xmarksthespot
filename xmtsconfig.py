@@ -47,17 +47,17 @@ PlayerName		%s
 CompletionCode		completion-code
 
 # Env settings.  These are accessible to lua.
-env-Platform		xmarksthespot
-env-CartFolder		/whatever
-env-SyncFolder		/whatever
-env-LogFolder		/whatever
-env-PathSep		/
-env-DeviceID		Python
-env-Version		2.11-compatible
-env-Downloaded		0
+env_Platform		xmarksthespot
+env_CartFolder		/whatever
+env_SyncFolder		/whatever
+env_LogFolder		/whatever
+env_PathSep		/
+env_DeviceID		Python
+env_Version		2.11-compatible
+env_Downloaded		0
 # If the following are empty, they are filled automatically.
-env-CartFilename	
-env-Device		
+env_CartFilename	
+env_Device		
 ''' % name)
 		handle.close ()
 	

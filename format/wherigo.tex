@@ -1,11 +1,18 @@
 \documentclass{article}
 \usepackage{listings}
+\usepackage{hyperref}
+\renewcommand\arraystretch{2}
 \begin{document}
 
+\textbf{\Large Specification of Wherigo 2.0}
+
+\tableofcontents
+
 \section{Introduction}
-This document aims to define all technical things about Wherigo. It is a work
-in progress. If you have any suggestions for changes or additions, please send
-them to me at wijnen@debian.org.
+This document aims to be the authorative reference for all technical things
+about Wherigo version 2.0. It is a work in progress. If you have any
+suggestions for changes or additions, please send them to me at
+wijnen@debian.org.
 
 This document only specifies what the Cartridge writer can see. An Engine MAY
 do extra processing and give extra feedback to the Player, but it MUST NOT do
@@ -21,10 +28,13 @@ Engines.
 Originally, Wherigo was released as a closed source Engine with a closed source
 Builder. There was no documentation about the internal format.
 
-This document intends to change that. For the most part, it tries to describe
-the original format as reverse engineered from the available programs. However,
-there are a few changes, in cases where there is consensus that the original
-format was a design mistake.
+The Wherigo foundation was started by a group of people who want to improve the
+platform.  This includes better documentation, so Authors can write better
+Cartridges.  The purpose of this document is to be the authorative source for
+any information about the file formats.
+
+The format described here is based on the original Wherigo format, but it is
+not identical.
 
 
 \section{Definitions}
@@ -39,7 +49,7 @@ Throughout this document, the following definitions are used:
 	\item Compiler: the program used to convert Cartridge source into  a file intended for playing.
 	\item Cartridge: a game definition, which is processed by an Engine to present a game to the Player.  Cartridges can be in source or compiled form.
 	\item Game Object: The ZCartridge object which holds information about the cartridge that is being played.
-	\item Event: a function in the lua code which is called by the Engine in response to an event, such as the Player pressing a button. If the function is not defined, triggering the Event is not an error.
+	\item Event: a function in the Lua code which is called by the Engine in response to an event, such as the Player pressing a button. If the function is not defined, triggering the Event is not an error.
 	\item Web Site: a central place to download Cartridges and mark them as completed.
 	\item MAY: an option.
 	\item MUST: a requirement.
@@ -50,7 +60,7 @@ Throughout this document, the following definitions are used:
 	\item Compile Time: when a cartridge is compiled by a Compiler.
 	\item Boot Time: When the cartridge is started, until the UI is presented to the Player.
 	\item Run Time: the main phase of the game.
-	\item Table: a lua table.
+	\item Table: a Lua table.
 \end{enumerate}
 
 \section{Cartridge startup}
@@ -59,31 +69,36 @@ Cartridge. The Engine MUST then perform at least the following actions, in this
 order:
 
 \begin{enumerate}
-\item Create a clean lua 5.1 environment.
-\item Remove \verb-debug-, \verb-package.loadlib- and \verb-io-, and everything
-	from \verb-os-, except \verb-os.clock-, \verb-os.date-,
-	\verb-os.difftime-, \verb-os.setlocale- and \verb-os.time-.
+\item Create a clean Lua 5.1 environment.
+\item Remove \verb-debug-, \verb-loadfile-, \verb-dofile-,
+	\verb-package.loadlib- and \verb-io-, and everything from \verb-os-,
+	except \verb-os.clock-, \verb-os.date-, \verb-os.difftime-,
+	\verb-os.setlocale- and \verb-os.time-.
 \item Add the ``Wherigo'' module, described below, to the environment.
-\item Create Wherigo.Player, described below. Wherigo.Player.Cartridge MUST be set to nil.
-\item Run the lua code from \verb-_cartridge.lua-. This returns the Game Object. This code is running during Boot Time.
-\item Wait for a GPS fix and set Player.ObjectLocation to its coordinates.
+\item Create all the objects referenced in and from Cartridge.wfi, described below.
+\item Run the Lua code from \verb-Cartridge.lua-. This code is running during Boot Time.
+\item Wait for a GPS fix and update Player.ObjectLocation and Player.PositionAccuracy.
 \item Trigger the OnStart Event. This and everything after it is running during Run Time.
 \end{enumerate}
 
 When a saved game is restored, the same procedure must be used, except that
 OnStart is not triggered.  Instead, the Engine MUST first restore all saved
-variables, and then trigger OnRestore.
+variables from the save file, and then trigger OnRestore.
+
+During Boot Time, the player location is not defined and the interface
+functions are not working yet.  The Cartridge MUST NOT use them.
 
 \section{The Lua operating environment.}
 
-The Cartridge code runs in a clean lua 5.1 environment (with ``dangerous''
+The Cartridge code runs in a clean Lua 5.1 environment (with ``dangerous''
 functions removed). Everything that is specific to Wherigo is in the Wherigo
 module. Below is a description of all its contents. Engines MAY include more
 members inside the Wherigo module for internal use. Anything that is not
 defined in this document MUST NOT be used by Authors or Builders. This includes
-creating new objects. Engines MUST NOT create or modify any variable outside of
-the Wherigo module. In other words: the Wherigo module is owned by the Engine,
-the rest is owned by the Author.
+creating new objects, because they may interfere with the Engine's internals.
+Engines MUST NOT create or modify any variable outside of the Wherigo module.
+In other words: the Wherigo module is owned by the Engine, the rest is owned by
+the Author.
 
 All constructors (functions which are used to create a new object) for objects
 implementing the ZObject interface can be called in two ways: either with the
@@ -95,7 +110,7 @@ Object as its value.
 Unless otherwise noted, all functions are methods. This includes event
 functions, which need to be defined by the Cartridge.  This means they need to
 get the object they are called on as a first argument. The normal way to do
-this in lua is by calling it as \verb-object:function()- instead of
+this in Lua is by calling it as \verb-object:function()- instead of
 \verb-object.function()-.
 
 \newcommand\codedef[2]{\par\noindent\begin{tabular}{|l|l|}\hline\parbox{.4\textwidth}{#1}&\parbox{.5\textwidth}{#2}\\\hline\end{tabular}\par}
@@ -130,13 +145,13 @@ Player.Name is set to the Player name, as defined by the Cartridge metadata.
 Player.CompletionCode is set to a special code from the metadata, which can be
 used to mark the Cartridge as ``Completed'' on the Web Site.
 
-Player.PositionAccuracy is the accuracy of the GPS signal, in meters.
+Player.PositionAccuracy is the accuracy of the GPS signal, in meters.  It is automatically updated.  If the hardware gives separate values for different dimensions, the conversion to this value is implementation defined.
 
-Player.ObjectLocation is set to \verb-INVALID_ZONEPOINT- during Boot Time.
-Any code which depends on the Player location MUST NOT be run at Boot Time.
-At Run Time, the coordinates MUST always be valid.
+Player.ObjectLocation is initially set to \verb-INVALID_ZONEPOINT-.  Any code
+which depends on the Player location MUST NOT be run at Boot Time.  At Run
+Time, the coordinates MUST always be valid.
 
-Player.InsideOfZones is a Table of Zones that the Player is inside of.
+Player.InsideOfZones is a Table of Zones that the Player is inside of.  The Engine MUST automatically update it.
 
 \subsection{Interfaces}
 Most objects which are used by Wherigo provide an interface, depending on their
@@ -151,8 +166,8 @@ default values are given in the explanation.
 
 All constructors for objects which provide the ZObject interface take either a
 ZCartridge as their first argument, or a Table with a Cartridge key in it and
-optionally more keys. This is not explained every time. The cartridge must be
-the Game Object.
+optionally more keys. This is not explained every time. The cartridge argument
+must always be the Game Object.
 
 Interfaces which have an other interface name in parentheses after their own
 name provide this interface in addition to the described attributes and
@@ -168,8 +183,8 @@ as part of an interface which provides this interface.
 \attrdef{Cartridge}{ZCartridge}{The Game Object.}
 \attrdef{Commands}{Table of ZCommand}{Commands which may be available with this object. Only valid for ZItem and Zone.}
 \attrdef{Container}{ZObject}{ZObject that contains this object. Always a Zone, ZItem, or nil. This attribute is read-only; it is updated automatically when using MoveTo.}
-\attrdef{CurrentBearing}{number}{Direction from the Player to this object. 0 if the Player contains this object.}
-\attrdef{CurrentDistance}{Distance}{Distance from the Player to this object. 0 if the Player contains this object.}
+\attrdef{CurrentBearing}{number}{Direction from the Player to this object. This is automatically updated by the Engine. 0 if the Player contains this object.}
+\attrdef{CurrentDistance}{Distance}{Distance from the Player to this object. This is automatically updated by the Engine. 0 if the Player contains this object.}
 \attrdef{Description}{String}{Description of this ZObject. For objects which can appear in the UI, this is shown as their details.}
 \attrdef{Icon}{ZMedia}{Image which represents this ZObject. This can be used as an icon when the object is shown in a list.}
 \attrdef{Inventory}{Table of ZObject}{A list of all objects which have this ZObject set as their Container. This attribute is read-only; it is updated automatically when using MoveTo. For Zones, the Player object is automatically added or removed when the player enters or leaves the zone, respectively. This happens before OnEnter or OnExit are triggered.}
@@ -182,9 +197,8 @@ as part of an interface which provides this interface.
 The interface for the Game Object. There is always exactly one object
 constructed with this interface. It is initialized with the metadata from the
 Cartridge, and holds some tables which can be used to reach objects in the
-game.
-\funcdef{ZCartridge ()}{ZCartridge}{-}{Constructor. Unlike other objects providing the ZObject interface, this constructor does not need to receive the Game Object (for obvious reasons).}
-\funcdef{zcartridge:GetAllOfType (type)}{Table of ZObjects}{String: type name to search for}{Return all items in zcartridge.AllZObjects of the requested type. Possible types are ZCartridge, ZItem, Zone, ZMedia, ZTask, ZTimer, and ZInput.}
+game. It does not have a constructor; it MUST be defined in Cartridge.wfi.
+\funcdef{zcartridge:GetAllOfType (String)}{Table of ZObjects}{String: type name to search for}{Return all items in zcartridge.AllZObjects of the requested type. Possible types are ZCartridge, ZItem, Zone, ZMedia, ZTask, ZTimer, and ZInput.}
 \funcdef{zcartridge:RequestSync ()}{nil}{}{Save the current state of the Game. More information on saving is below.}
 \attrdef{AllZObjects}{Table of ZObject}{List of all ZObjects in this Cartridge (including the Game Object itself). This attribut is read-only. It is automatically updated when ZObjects are created or destroyed.}
 \attrdef{Activity}{String}{Activity from the metadata.}
@@ -193,11 +207,10 @@ game.
 \attrdef{Company}{String}{Company from the metadata.}
 \attrdef{CreateDate}{String}{CreateDate from the metadata.}
 \attrdef{Copyright}{String}{Copyright claim from the metadata.}
-\attrdef{Icon}{ZMedia}{Icon from the metadata.}
 \attrdef{LastPlayedDate}{String}{LastPlayedDate from the metadata.}
 \attrdef{License}{String}{License from the metadata. Only the short part; the Long Value is not included.}
 \attrdef{Media}{ZMedia}{Poster from the metadata.}
-\attrdef{OnEnd}{Function}{Event, called when the game ends.}
+\attrdef{OnEnd}{Function}{Event, called when the game ends.}%XXX: Why?  It's not like anything can still be done...  Also, this seems like a fake event.
 \attrdef{OnRestore}{Function}{Event, called immediately after loading a saved game. See more on saving below.}
 \attrdef{OnStart}{Function}{Event, called when the game is started.}
 \attrdef{OnSync}{Function}{Event, called just before saving a game. See more on saving below.}
@@ -211,51 +224,71 @@ game.
 \attrdef{ZVariables}{Table of strings or numbers}{See information on saving below.}
 
 \subsubsection{ZItem (ZObject)}
-An entity in the game, which can be interacted with. These can often be picked up, or talked to.
+An entity in the game, which can be interacted with. These can often be picked up, or talked to.  If ObjectLocation is nil, their location is identical to that of their Container.  If they do not have a Container, or its ObjectLocation is also nil, they MUST NOT be shown at any location, and CurrentBearing and CurrentDistance MUST both be set to infinity.
 \funcdef{ZItem (Cartridge)}{ZItem}{-}{Constructor.}
 \attrdef{ObjectLocation}{ZonePoint}{Current location of this ZObject.}
 
 \subsubsection{ZonePoint}
-Position on the globe.
+Position on the globe.  Latitude and Longitude are defined in degrees.
+Altitude is defined in meters.
 \funcdef{ZonePoint (latitude, longitude, altitude)}{ZonePoint}{Coordinates.}{Constructor.}
 \attrdef{altitude}{number}{Altitude.}
 \attrdef{latitude}{number}{Latitude.}
 \attrdef{longitude}{number}{Longitude.}
 
 \subsubsection{Zone (ZObject)}
-A region on the globe. The region is defined by its perimiter and a point
-inside it. Every closed curve divides a sphere into two parts. One part is
-inside and the other is outside. Normally, the inside part is a small region
-and the outside part is most of the sphere, but that isn't a requirement. The
-OriginalPoint defines which of the parts is inside and which is the outside.
+A region on the globe. The region is defined by its perimiter.  Every closed
+curve divides a sphere into two parts. One part is inside and the other is
+outside. The inside part is the smaller of the two parts.
 
-As a special case, zones with no surface are allowed, including single points.
-The OriginalPoint of such zones MUST be on the perimiter.  For all other zones,
-the OriginalPoint MUST NOT be on the perimiter.
+Zones with no surface are allowed, including single points.
 
 If the Player's coordinate changes in a big step, for whatever reason, all
 callbacks that should have been called if it had changed in small steps must be
-called. For example, if a Zone is constructed with State NotInRange and
-positive ProximityRange and DistanceRange, and the Player is inside it,
+called. For example, if a Zone has a positive ProximityRange and DistanceRange,
+the current state is NotInRange and the Player is found to be inside it,
 OnDistant, OnProximity and OnEnter must all be called (in that order)
 immediately.
+
+For very thin Zones, it is possible that the Player's location skips from one
+side of it to the other without registering a position inside the Zone.  When
+that happens, the Engine MAY trigger the events for entering and leaving the
+Zone.
+
+When the Engine considers the Player to be inside a Zone is implementation
+defined.  However, it MUST be possible to trigger the OnEnter event of a single
+point Zone.
+
+The Zone perimiter is defined by a series of points.  The edge of the Zone is
+the union of all line segments between two consecutive points in the sequence.
+The Zone MUST NOT contain intersecting segments.  The last point is implicitly
+connected to the first point.
 
 \funcdef{Zone (Cartridge)}{Zone}{-}{Constructor.}
 \attrdef{OnDistant}{Function}{Event, triggered when the Player enters the \textit{Distant} ring of a Zone. Note that this can be entered from Proximity and from NotInRange, and if Proximity is set to a nonpositive value, also from Inside.}
 \attrdef{OnEnter}{Function}{Event, triggered when the Player enters the Zone.}
 \attrdef{OnExit}{Function}{Event, triggered when the Player leaves the Zone.}
 \attrdef{OnProximity}{Function}{Event, triggered when the Player enters the \textit{Proximity} ring of a Zone. Note that this can be entered from Inside and from Distant, and if DistanceRange is set to a value which is not larger than ProximityRange, from NotInRange.}
-\attrdef{OriginalPoint}{ZonePoint}{The point which is supposed to be the origin of the Zone; it MUST NOT be on the perimiter, except for zero-surface zones, where it MUST be on the perimiter. It is by definition inside the Zone.}
-\attrdef{Points}{Table of ZonePoint}{Perimiter of the zone.  The perimiter goes with line segments from each point to the next.  After the last point, a line segment back to the start is added to close the perimiter.}
-\attrdef{ShowObjects}{String}{One of \textit{OnEnter}, \textit{OnProximity}, or \textit{Always}.  Defines when ZObjects which are inside the Zone are visible. When the Player is inside the Zone, they are always visible. When you are in the proximity range, they are only visible if this is set to Always or OnProximity. Otherwise they are only visible if this is set to Always.}
+\attrdef{Points}{Table of ZonePoint}{Perimiter of the zone.}
+\attrdef{ShowObjects}{String}{One of \texttt{OnEnter}, \texttt{OnProximity}, or \texttt{Always}.  Defines when ZObjects which are inside the Zone are visible. When the Player is inside the Zone, they are always visible. When the Player is in the proximity range, they are only visible if this is set to Always or OnProximity. Otherwise they are only visible if this is set to Always.}
 \attrdef{State}{String}{State of the Player with respect to this Zone. One of
-	\textit{Inside}, \textit{Proximity}, \textit{Distant}, \textit{NotInRange}. The Player is inside the zone when Player.ObjectLocation is within the perimiter, or closer to it than the accuracy of the GPS receiver. Otherwise, if the distance to the perimiter minus the GPS accuracy is smaller than ProximityRange, the State is Proximity. If it is larger than ProximityRange, but smaller than DistanceRange, the State is Distant. Otherwise it is NotInRange. The Engine may change the meaning of ``the accuracy of the GPS receiver'' to avoid Players from jumping in and out of a zone only due to GPS jitter.  If not specified in the constructor, the initial value of State is NotInRange. If this is not the actual state at that time, callbacks are immediately called as if the Player has moved from NotInRange to their current location.}
+	\texttt{Inside}, \texttt{Proximity}, \texttt{Distant},
+\texttt{NotInRange}. The Player is inside the zone when Player.ObjectLocation
+is within the perimiter. Otherwise, if the distance to the perimiter is smaller
+than ProximityRange, the State is Proximity. If it is larger than
+ProximityRange, but smaller than DistanceRange, the State is Distant. Otherwise
+it is NotInRange. The Engine may use any method to avoid Players from jumping
+in and out of a zone due to GPS jitter.  This means that it is possible that
+the value of this attribute does not strictly match with this description.  If
+not specified in the constructor, the initial value of State is NotInRange. If
+this is not the actual state at that time, callbacks are immediately called as
+if the Player has moved from NotInRange to their current location.}%XXX: Enum?
 
 \subsubsection{ZTask (ZObject)}
 A task that the player can, and often should, do. There are three possible states: incomplete, done (correctly completed) and failed (complete, but incorrect).
 \funcdef{ZTask (Cartridge)}{ZTask}{}{Constructor.}
-\attrdef{Complete}{Boolean}{If true, the ZTask is considered completed. The UI MAY show this to the Player.}
-\attrdef{Correct}{Boolean}{If Complete if false, this is ignored. Otherwise, it defines if the task was correctly completed.}
+\attrdef{Complete}{Boolean}{If true, the ZTask is considered completed. The Engine MUST show this to the Player.}
+\attrdef{Correct}{Boolean}{If Complete if false, this is ignored. Otherwise, it defines if the task was correctly completed. The Engine MUST show this to the Player.}
 
 \subsubsection{ZTimer (ZObject)}
 A timer which can be used to schedule one-time or periodic (interval)
@@ -263,15 +296,15 @@ callbacks. For interval timers, the Engine SHOULD call the OnTick
 function at constant intervals. However, there is no guarantee that this is
 always possible.
 \funcdef{ZTimer (Cartridge)}{ZTimer}{}{Constructor.}
-\funcdef{ztimer:Start ()}{nil}{}{Starts the timer. If it was already running, do nothing. If ztimer.Remaining is negative, it is set to ztimer.Duration. If ztimer.Remaining is 0, a Tick event is immediately triggered. To avoid dead-locks, a Cartridge MUST NOT set Duration of an interval timer to 0.}
+\funcdef{ztimer:Start ()}{nil}{}{Starts the timer. If it was already running, do nothing. If ztimer.Remaining is negative, it is set to ztimer.Duration. If ztimer.Remaining is 0, a Tick event is immediately triggered. A Cartridge MUST NOT set Duration of an interval timer to 0.}
 \funcdef{ztimer:Stop ()}{nil}{}{Stops the timer. If it was not running, do nothing.}
-\funcdef{ztimer:Tick ()}{nil}{}{This function is called when the timer expires. It can be called from the lua code to fake an expired timer event. Countdown timers are stopped when this is called. Interval timers are restarted.}
+\funcdef{ztimer:Tick ()}{nil}{}{This function is called when the timer expires. It can be called from the Lua code to fake an expired timer event. Countdown timers are stopped when this is called. Interval timers are restarted.}
 \attrdef{Duration}{Number}{Time in seconds. This is used when ztimer is started with a negative Remaining value. In particular, it is used as the restart value for Interval ZTimers.}
-\attrdef{OnStart}{Function}{Event which is triggered when Start is called. It is not triggered when an Interval ZTimer restarts.}
-\attrdef{OnStop}{Function}{Event which is triggered when Stop is called. It is not triggered when a ZTimer expires.}
+\attrdef{OnStart}{Function}{Event which is triggered when Start is called. It is not triggered when an Interval ZTimer restarts.}%XXX This should be removed.
+\attrdef{OnStop}{Function}{Event which is triggered when Stop is called. It is not triggered when a ZTimer expires.}%XXX: This should be removed.
 \attrdef{OnTick}{Function}{Event which is triggered when the timer expires. For Interval timers, this is called after restarting the timer, so calling Stop from this event will work as expected.}
 \attrdef{Remaining}{Number}{Time in seconds before it expires. If the timer is running, this value will automatically count down. This is a read-only value.}
-\attrdef{Type}{String}{Must be \textit{Countdown} or \textit{Interval}. Defines whether ztimer stops or restarts when it expires.  If not specified, this defaults to Countdown.}
+\attrdef{Type}{String}{Must be \texttt{Countdown} or \texttt{Interval}. Defines whether ztimer stops or restarts when it expires.  If not specified, this defaults to Countdown.}%XXX: Change this to a boolean, or an enum?
 
 \subsubsection{ZCommand}
 Helper object for commands on ZItems and Zones. When these are displayed, it may
@@ -292,28 +325,30 @@ examples.
 	\item Command works with objects, and one or more objects are available. A group of buttons is displayed; one for each object.
 \end{enumerate}
 
-When a command button is clicked by the Player, a callback is triggered on the Owner ZObject.
+When a command is activated by the Player, a callback is triggered on the Owner
+ZObject.
 
 \funcdef{ZCommand (Cartridge)}{ZCommand}{}{Constructor.}
 \attrdef{CmdWith}{Boolean}{If true, the command needs an object to work on.}
 \attrdef{EmptyTargetListText}{String}{The text that is displayed for commands which need an object, when none is available.}
-\attrdef{Enabled}{Boolean}{If set the false, the command cannot be run. Normally, it will not be shown to the Player at all.}
-\attrdef{MakeReciprocal}{Boolean}{Only used if CmdWith is true and WorksWithAll is false. If true (the default), the command can also be selected when the Target ZObject is shown.}
+\attrdef{Enabled}{Boolean}{If set the false, the command cannot be run. The Engine SHOULD NOT show it to the Player at all.}
+\attrdef{MakeReciprocal}{Boolean}{Only used if CmdWith is true and WorksWithAll is false. If true (the default), the command SHOULD also be shown when the Target ZObject is shown.}
 \attrdef{Text}{String}{The text that is shown to identify the command. For example, \textit{Talk}. This must be a short text. It is often identical to the name used to register the command with an object.}
-\attrdef{WorksWithAll}{Boolean}{Only used if CmdWith is true. If this is true, every ZItem, except the object that this command is for, will automatically be in the list of available targets.}
-\attrdef{WorksWithList}{Table of ZObjects}{Only used if CmdWith is true and WorksWithAll is false. This is a list of candidate ZItems and Zones for using the command with.}
+\attrdef{WorksWithAll}{Boolean}{Only used if CmdWith is true. If this is true, every ZItem, except the Owner object, will automatically be in the list of available targets.}
+\attrdef{WorksWithList}{Table of ZObjects}{Only used if CmdWith is true. This is a list of candidate ZItems and Zones for using the command with. If WorksWithAll is true, any ZItems are valid targets regardless of whether they are in this list.}
 
-\subsubsection{ZMedia (ZObject)}
+\subsubsection{ZMedia}
 Interface for objects which reference external data: a sound or an image.
 
 The metadata describes which files or URLs are used to get the external media,
 including the compiler directives for selecting and modifying it for use on the
-target device. All ZMedia objects are created as part of the ZCartridge
-construction. Lua code MUST NOT create ZMedia objects itself.
+target device. All ZMedia objects are created when starting the Cartridge,
+before running any Lua code.  Lua code MUST NOT create ZMedia objects itself.
 
-ZMedia are used from lua code, by linking them to messages (for images) or
-using them with PlayAudio (for sounds). They are opaque objects; they have no
-public methods or attributes.
+ZMedia are used from Lua code, by linking them to messages (for images) or
+using them with PlayAudio (for sounds).
+\attrdef{AltText}{String}{Text which the Engine SHOULD display instead of the
+image, if it cannot display the image for any reason.}
 
 \subsubsection{ZInput (ZObject)}
 Helper object to request input from the Player. There are three types of input:
@@ -330,7 +365,7 @@ zinput.Media as an illustration, if there is one.
 
 \subsection{Functions}
 \subsubsection{User interface}
-These functions may not be called during cartridge initialization.
+These functions may not be called during Boot Time.
 
 There is always at most one graphical function waiting for Player input. If a
 second one is called before the previous one was answered, it will replace it.
@@ -338,50 +373,55 @@ The previous message's callback function will be called with a nil argument to
 signify that this happened.
 
 \funcdef{Alert ()}{nil}{}{Give a signal to the Player, such as a beep or a flash.}
-\funcdef{Dialog (table)}{nil}{table: a list of messages.}{Show a list of messages to the player, in sequence. The elements of the Table are the same as the argument of the MessageBox function, except that they cannot have a Callback or Buttons (the Engine would normally give them an implicit Ok button to show the next message).}
-\funcdef{DriveTo (zonepoint)}{nil}{target ZonePoint}{Leave the Engine interface temporarily, and let the device navigate the Player to zonepoint.}
+\funcdef{Dialog (table)}{nil}{table: a list of messages.}{Show a list of messages to the player, in sequence. The elements of the Table are the same as the argument of the MessageBox function, except that they cannot have a Callback or Buttons (the Engine provides a way to show the messages, such as an Ok button after each message).}
+\funcdef{DriveTo (zonepoint)}{nil}{target ZonePoint}{Leave the Engine interface temporarily, and let the device navigate the Player to zonepoint.  How this is done, if at all, is implementation defined.  There is no callback when the Player has arrived.}
 \funcdef{GetInput (zinput)}{nil}{The ZInput to request.}{Request a previously defined input from the Player.}
-\funcdef{LogMessage (message)}{nil}{Message to log}{Write a message to a log file. The Engine MAY display this file to the Player as well. The log format is described below.}
-\funcdef{MessageBox (table)}{nil}{table: the message to display.}{The Table, like a ZInput, contains a Text to display, and an optional Media containing an image. In addition, it contains Buttons, which is a Table of strings, which are printed on buttons, and a Callback function, which is called when a button is pressed. Callback is passed a string 'Button1' if the first button is pressed, 'Button2' for the second, etc.}
-\funcdef{PlayAudio (sound)}{nil}{The ZMedia to play.}{Play sound (which must be a sound media file). Any previously playing file MAY be stopped.}
+\funcdef{LogMessage (message)}{nil}{Message to log}{Write a message to a log file. The Engine MAY display the message to the Player as well. The log format is described below.}
+\funcdef{MessageBox (table)}{nil}{table: the message to display.}{The Table, like a ZInput, contains a Text to display, and an optional Media containing an image. In addition, it contains Buttons, which is a Table of strings, which SHOULD be printed on buttons, and a Callback function, which MUST be called when an option is selected. Callback is passed a string 'Button1' if the first button is pressed, 'Button2' for the second, etc.}
+\funcdef{PlayAudio (sound)}{nil}{The ZMedia to play.}{Play sound (which must be a sound media file). Any previously playing sound MAY be stopped.}
 \funcdef{SaveClose ()}{nil}{}{Save the game and quit the Engine.}
-\funcdef{ShowScreen (which, [item])}{nil}{which: One of the SCREEN-constants.\\item: a ZObject}{Try to focus the Player's attention on the given part of the interface. If which is DETAILSCREEN, item MUST be used to specify of which object the details should be shown. For other values of which, item MUST be ignored and should be omitted.}
+\funcdef{ShowScreen (which, [item])}{nil}{which: One of the SCREEN-constants.\\item: a ZObject}{Try to focus the Player's attention on the given part of the interface. If which is DETAILSCREEN, item MUST be used to specify of which object the details should be shown. For other values of which, item MUST be omitted and SHOULD be ignored.}
 \funcdef{ShowStatusText (text)}{nil}{message string}{Let the Player know about something in a non-invasive way. Normally, this happens by showing the text in the status bar of the Engine.}
 \funcdef{StopSound ()}{nil}{}{Abort all currently playing sounds.}
 
 \subsubsection{Spherical arithmetics}
-These functions SHOULD use spherical arithmetics to perform their task. At the very least, they MUST work properly for zones crossing any coordinate boundary.
+These functions SHOULD use spherical arithmetics to perform their task. At the very least, they MUST work properly for zones crossing any coordinate boundary.  All distances are in meters; all bearings are in degrees with 0 meaning north and 90 meaning east.  Bearing return values MUST be in the interval from 0 (inclusive) to 360 (exclusive).  Bearing arguments have no such limitation.
 \funcdef{IsPointInZone (point, zone)}{Boolean}{point: The ZonePoint to test.\\zone: The Zone te test.}{Return true if point and zone.OriginalPoint are in the same segment of the sphere.}
 \funcdef{TranslatePoint (point, distance, bearing)}{ZonePoint}{point: point to translate.\\distance, bearing: vector to translate over.}{Return the ZonePoint where you end up when moving from point over vector.}
-\funcdef{VertorToPoint (point1, point2)}{Distance, number}{point1, point2: ZonePoints}{Return the vector from point1 to point2.}
-\funcdef{VectorToSegment (point, s1, s2)}{Distance, number}{point: the ZonePoint to test.\\s1, s2: the ZonePoint endpoints of the segment to test. The segment is the shortest line over the sphere from s1 to s2. s1 and s2 MUST NOT be exactly opposite each other.}{Determine the closest point on the segment from point; return the vector from point to this point.}
-\funcdef{VectorToZone (point, zone)}{Distance, number}{point: the ZonePoint to test.\\zone: the Zone to test.}{Return the minimum of the results of VectorToSegment for each of the segments of the perimiter of the Zone.}
+\funcdef{VertorToPoint (point1, point2)}{distance, bearing}{point1, point2: ZonePoints}{Return the vector from point1 to point2.}
+\funcdef{VectorToSegment (point, s1, s2)}{distance, bearing}{point: the ZonePoint to test.\\s1, s2: the ZonePoint endpoints of the segment to test. The segment is the shortest line over the sphere from s1 to s2. s1 and s2 MUST NOT be exactly opposite each other.}{Determine the closest point on the segment from point; return the vector from point to this point.}
+\funcdef{VectorToZone (point, zone)}{distance, bearing}{point: the ZonePoint to test.\\zone: the Zone to test.}{Return the minimum of the results of VectorToSegment for each of the segments of the perimiter of the Zone.}
 
 \subsubsection{Other}
 \funcdef{NoCaseEquals (s1, s2)}{Boolean}{s1, s2: strings to compare.}{Return the case-insensitive comparison of s1 and s2.}
 \funcdef{ToUserUnits (distance)}{String}{Distance to convert, in meters.}{Return distance in a suitable format for displaying to the user.}
 
 \section{File types}
-\subsection{Zipped source: gwz}
-A zip archive containing a single directory, which must have the same name as
-the gwz file itself, minus its extension. This directory contains the gwi
-metadata file, \verb-_cartridge.gwi-, and \verb-_cartridge.lua-. In addition,
-if it contains sounds they must be in a subdirectory named Sound, and if it
-contains images they must be in a sudirectory named Image.  If it contains
-translations they must be in a subdirectory named Translation, in the form of
-countrycode.po, for example \verb-nl_BE.po- for Flemmish (Belgian Dutch).
+\subsection{Zipped source: wfz}
+A zip archive containing a single directory and nothing more.  The name of this directory is the name of the Cartridge.  The zip archive itself SHOULD be this same name, plus the wfz extension.  This directory contains:
 
-\subsection{Compiled Cartridge: gwc}
-%Format defined at \verb-http://code.google.com/p/wherugo/wiki/GWC-. Additions will be required for supporting the new metadata format.
+\begin{itemize}
+	\item \verb-Cartridge.gwi-: Main cartridge information.  Initial objects are defined here, including ZCartridge and Player.
+	\item \verb-Cartridge.lua-: The main script.  This is run at Boot Time.
+	\item \verb-Script-: Optional.  A directory containing additional Lua files, if any.
+	\item \verb-Media-: Optional.  A directory containing all the media files, if any.
+	\item \verb-Translation-: Optional.  A directory containing all the translation files, if any.  Any translations MUST be in gettext format, in the form of countrycode.po, for example \verb-nl_BE.po- for Flemmish (Belgian Dutch).
+\end{itemize}
+
+\subsection{Compiled Cartridge: wfc}
+%Old format defined at \verb-http://code.google.com/p/wherugo/wiki/GWC-. Additions will be required for supporting the new metadata format.
 The gwc format is identical to the gwz format, with the following differences.
-The file \verb-_cartridge.lua- is compiled.  The file \verb-_cartridge.gwi- is
-adjusted to contain only what the target Engine can support, and all media
-files are explicitly defined in it.  The Translation directory contains mo
-files instead of po files.  All indented lines, including implicitly indented
-empty lines, in the gwi file are indented with only a single space.
+\begin{itemize}
+	\item \verb-Cartridge.lua- SHOULD be compiled.
+	\item \verb-Cartridge.gwi- MUST be adjusted to contain only what the target Engine can support.
+	\item Media files which are not used by the target platform SHOULD NOT be included.
+	\item All included media files MUST be explicitly defined in \verb-Cartridge.gwi-.
+	\item The Translation directory MUST contain mo files instead of po files.
+	\item All indented lines, including implicitly indented empty lines, in \verb-Cartridge.gwi- MUST be indented with only a single space.
+\end{itemize}
 
 \subsection{Log: gwl}
-One line per message. Each line contains a timestamp, GPS information, and a string as passed to LogMessage. It has fields separated by \verb-|-. The fields are:
+One line per message, with fields separated by \verb-|-. The fields are:
 \begin{enumerate}
 	\item Timestamp; 14 digits without separators: Year (4), month (2), day (2), hour (2), minutes (2), seconds (2).
 	\item Latitude, in degrees. Positive means north.
@@ -391,117 +431,127 @@ One line per message. Each line contains a timestamp, GPS information, and a str
 	\item Message, which can be any string not containing a newline. Note that it can contain \verb-|-, which MUST NOT be treated as a field separator.
 \end{enumerate}
 
-\subsection{Metadata: gwi}
-There are several media files, and there is metadata about them in this file.
-
+\subsection{Metadata: Cartridge.gwi}
 The cartridge and media metadata in the gwi-file is given in RFC822-like form;
-the same that is used in e-mail headers. Every field consists of one line which
-matches the regular expression:
-
-\begin{center}\verb-'^(\w+):\s*([^;]*?)(?:;\s*(\w+)\s*(?:=\s*([^;]+))?\s*)*$'-\end{center}
-
-The subexpressions are named:
-\begin{enumerate}
-	\item Key
-	\item Value
-	\item Attribute
-	\item Attribute Value
-\end{enumerate}
+the same that is used in e-mail headers. Every field consists of one line,
+which cannot be indented.  This line is broken at the first colon (:).  The
+part before it is called the key, the part after it is called the value.  Both
+the key and the value have any surrounding whitespace stripped off.
 
 For clarity, an example Cartridge follows below.
 
-This first line is sometimes followed by one or more indented lines. These
-lines together, including the newlines, but excluding the indentation, are
-called the Long Value. Empty lines are considered indented empty lines, even if
-they don't have any indentation.  Such lines (with or without indentation) are
-stripped from the end of a long value, but preserved in other places.
+The unindented line with the key and value is sometimes followed by one or more
+indented lines. These lines together, including the newlines, but excluding the
+indentation, are called the Long Value. Empty lines are considered indented
+empty lines, even if they don't have any indentation.  Such lines (with or
+without indentation) are ignored outside of a long value.  They are stripped
+from the end of a long value, but preserved inside it.
 
-Lines starting with a (possibly indented) \textit{#} are comments and ignored
-completely.
+Any keys for which this document does not define a long value MUST NOT have one.
 
-Now follows a list of keys, with their details. Every key MUST occur exactly
-once, unless otherwise specified. Attributes not defined here MUST NOT be
-used. Values for fields which do not allow Attributes may contain any
-characters, including semicolons (this exception is not shown in the regular
-expression above).
+Lines starting with a (possibly indented) \texttt{\#} are comments and ignored
+completely, no matter where they are.  A \texttt{\#} can be part of a value.
 
-\newcommand\defkey[5]{\par\noindent\begin{tabular}{|l|l|}\hline Key&#1\\Value&\parbox{.75\textwidth}{#2}\\Long Value&\parbox{.75\textwidth}{#3}\\Attributes&\parbox{.75\textwidth}{#4}\\Comments&\parbox{.75\textwidth}{#5}\\\hline\end{tabular}\par}
-\defkey{Format}{The file format of the cartridge.  Currenly always \textit{1.0}.}{-}{-}{}
-\defkey{Name}{The cartridge's long name. The filename, which is the short name, SHOULD be an abbreviation of this long name.}{The cartridge's description.}{-}{}
-\defkey{Version}{The cartridge's version.}{-}{-}{The version SHOULD be a period-separated string. Versions released later SHOULD have a higher version than earlier versions of the same Cartridge. Comparing versions is done by splitting the version on periods and comparing each group numerically if possible, and alphabetically otherwise. The first group which differs defines which version is higher. For example, \textit{1.2.8} is a lower version than \textit{1.2.10} and both are lower than \textit{1.2.unreleased}}
-\defkey{Author}{The Author.}{-}{-}{}
-\defkey{E-mail}{The e-mail address for sending feedback.}{-}{-}{}
-\defkey{Copyright}{The copyright claims for this cartridge, or empty if all copyright claims are in the long value.}{Continuation of the copyright claims, if required.}{-}{This should list the people or organizations who hold the copyright on this cartridge.}
-\defkey{License}{The name of the license under which this cartridge is distributed.}{Full license text, or a link to it, for the cartridge source. Note that this information is not included in the compiled Cartridge, so it MUST be extracted from the source and passed on to the location where the compiled Cartridge can be retrieved.}{-}{The license is a statement from the copyright holder which allows the Web Site (and possibly the Player) to distribute the cartridge.}
-\defkey{Company}{The name of the company or other organization that the author works for.}{-}{-}{This key is optional.  If used, the company should normally also be set as copyright holder.}
-\defkey{Activity}{MUST be one of a defined set of values. Currently allowed values are TourGuide, Puzzle, Fiction, and Geocache.}{-}{-}{}
-\defkey{StartingLocation}{Three floating point numbers, setting the starting location of the Cartridge. The first two numbers define the latitude and longitude, both in degrees. The third number defines the altitude, in meters.}{Description of the starting location.}{-}{}
-\defkey{BuilderVersion}{Version of the Builder.}{-}{-}{This key is optional. A Builder MUST include this key. The version has the same requirements as Cartridge Version, plus the requirement that the first group of the version MUST be the Builder's name.}
-\defkey{Poster}{Name of the title image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
-\defkey{Icon}{Name of the icon image.}{-}{-}{This key is optional. If given, it must be the name of a (possibly implictly) defined Image.}
-\defkey{CreateDate}{Date that the cartridge was originally created.}{-}{-}{}
-\defkey{UpdateDate}{Date that the cartridge was last updated.}{-}{-}{}
-\defkey{Image}{Name of the image.}{Description of the image.}{AltText = text to use when the image cannot be displayed.}{See discussion about media below.}
-\defkey{Sound}{Name of the sound.}{Description of the sound.}{-}{See discussion about media below.}
-\defkey{File}{Filename of a media object.}{-}{Directives for this file; format to be determined.}{See discussion about media below.}
-\defkey{URL}{URL where a media file can be retrieved.}{-}{Directives for this file; format to be determined.}{See discussion about media below.}
+The data consists of a format definition, followed by a series of blocks.  Each
+block starts with an object definition, with the object type as its key.  All
+following keys define properties of that object, until the next object
+definition starts.  All these properties MUST be defined ont he created Lua
+object by the Engine.  For boolean attributes, the value MUST be either
+\texttt{true} or \texttt{false}, ignoring case, and the Engine MUST set the
+attribute to the boolean, not the string.  For numerical attributes, the Engine
+MUST set the attribute to the number.  ZonePoints are given as a list of three
+numbers, separated by spaces.  The first number is the latitude, in degrees,
+the seconds is the longitude in degrees and the third is the altitude in
+meters.  If the value is the string \texttt{none}, it will be set to
+\verb-INVALID_ZONEPOINT-.
 
-\vskip\baselineskip
+The value of the object definition is the identifier of the object.
+The identifier MUST consist of one or more groups of identifier parts
+separated by periods.  Every identifier part must only contain unaccented uppercase
+and lowercase roman letters, digits and underscores, and must not start with a
+digit.  In regular expression terms, an identifier part is
+\verb#[A-Za-z_][A-Za-z0-9_]*# and the full object identifier is
+\verb#[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*#.
 
-Media objects are created by the Engine when the ZCartridge is created. They
-are reachable from lua as members of the Game Object's \textit{Sound} and
-\textit{Image} members.
+When the Engine creates the objects, it MUST add a variable to the Lua
+environment.  Objects which have an identifier consisting of a single part MUST
+be created in the global namespace.  For objects with two parts, if an object
+with the first part as its identifier exists, it must be created as an
+attribute of that object.  If not, a table must be created and the object must
+be added to this table.  For objects with more parts, the same rule is
+recursively applied.
 
-The definition of media files (Image, or Sound) in the gwi-file is done
-by first defining their name, using the key of the appropriate type.
-Immediately after this, zero or more File or URL fields must be defined to
-specify options which provide this media object. File and URL fields MUST NOT
-be used in any other place.
+The format definition is a single line, which uses the word Format as a key.
+Its value MUST be set to the exact string \texttt{1.0}.
 
-Filenames specified by File keys are relative to the Image or Sound
-subdirectory of the Cartridge source, for Image and Sound media files
-respectively. If they use subdirectories, they MUST use the forward slash
-``\verb-/-'' as a directory separator.
+\newcommand\defkey[5]{\par\noindent\begin{tabular}{|l|l|}\hline Key&#1\\Value&\parbox{.75\textwidth}{#2}\\Long Value&\parbox{.75\textwidth}{#3}\\Comments&\parbox{.75\textwidth}{#4}\\\hline\end{tabular}\par}
 
-Media objects or files which do not need to specify anything, do not need to be
-defined in the gwi-file. A media file which is in the base Image or Sound
-directory of a Cartridge and which is not defined in the gwi-file MUST be
-treated the same as a media file for which an Image, or Sound field (depending
-on the file location) is defined as the filename of the file, minus the
-extension, with a corresponding File with the filename as a value. If there are
-several files which would define the same media object (they differ only in
-their file extension), they MUST be treated as files all providing the same
-object. (But if they are different types, one Sound and one Image, they MUST be
-providing separate objects.)
+\subsubsection{Common attributes}
+Some attributes are valid for all objects.  These are: \textit{Active},
+\textit{Icon}, \textit{Media}, \textit{Name} and \textit{Visible}.  The Icon
+and Media keys, if defined, SHOULD have the identifier of a MediaSource as
+their value.  See also the discussion of MediaSource below.
 
-Media files which are placed in subdirectories of Image or Sound MUST be
-referenced using an explicit File field.
+\subsubsection{ZCartridge}
+This defines the global settings of the Cartridge.  The following keys are allowed: \textit{Activity}, \textit{Author}, \textit{BuilderVersion}, \textit{Company}, \textit{Copyright}, \textit{CreateDate}, \textit{CountryId}, \textit{Email}, \textit{Id}, \textit{License}, \textit{PublishDate}, \textit{StartingLocation}, \textit{StateId}, \textit{TargetDevice}, \textit{TargetDeviceVersion}, \textit{UseLogging}, \textit{UpdateDate} and \textit{Version}.
 
-If a media object is defined, but no sources, then any files of a fitting type
-with the object's name as their basename are used as candidates to provide it.
+Of these, StartingLocation, License and Copyright can have a long value, which will be used as StartingLocationDescription, LicenseText and Copyrights respectively.  License SHOULD use the value for the name or abbreviation of the license, and the long value for any explanation, or the license text itself.
+
+\subsubsection{ZTimer}
+Possible keys: \textit{Type} and \textit{Duration}.  Type defaults to \texttt{Countdown}, Duration to -1 (which makes the timer unusable until it is set to a positive value).
+
+\subsubsection{ZInput}
+Possible keys: \textit{Text} and \textit{InputType}.  InputType defaults to \texttt{Text}.
+
+\subsubsection{ZItem}
+Possible keys: \textit{Container} and \textit{ObjectLocation}.  The Container must be the name of a ZItem or Zone as defined in Cartridge.wfi.  Objects may be defined in any order; the Engine MUST allow forward references as well as back references.  Objects MUST NOT contain themselves (directly or through other container objects).
+
+\subsubsection{ZTask}
+Possible keys: \textit{Complete} and \textit{CorrectState}.  Complete defaults to false, CorrectState to true.
+
+\subsubsection{Zone}
+Possible keys: \textit{ShowObjects}, \textit{State}, \textit{ProximityRange}, \textit{DistanceRange}, \textit{Points}.  ShowObjects defaults to OnEnter, State defaults to NotInRange, ProximityRange and DistanceRange both default to -1.  The value and long value of Points are merged into one.  The short value MAY be empty.  There MUST NOT be empty lines in the long value.  Every line is parsed as a ZonePoint.  The resulting Table is assigned to the attribute.
+
+\subsubsection{ZMedia}
+Possible keys: \textit{File} and \textit{URL}.  Both attributes may be specified any number of times.  Every attribute declares that the value can be used to provide the media (either from the Cartridge, or from the internet).
+
+In addition to the objects defined in Cartridge.wfi, the Engine MUST create
+ZMedia objects for any file in a subdirectory of Media that is not referenced
+by any ZMedia object definition.  If they are in a subdirectory of Media, the
+ZMedia object must be created as if the name is the path relative to Media,
+with the period as directory separator.  The object identifier and the Name
+attribute of such implicitly defined ZMedia objects MUST be set to this
+filename with directory separators replaced by periods, excluding the
+extension.  If a ZMedia with that object identifier already exists, the file
+MUST be treated as if it was referenced as a File attribute for that object.
+The Cartridge MUST NOT define objects other than ZMedia with object identifiers
+of implicitly defined ZMedia.
 
 If a media object is defined and no sources are present, it MUST be treated the
 same way as if there are sources, but none of them can be used. This is not an
-error: for images, the Alt text MUST be displayed instead of the image; for
+error: for images, the Alt text SHOULD be displayed instead of the image; for
 sounds, requests to play them SHOULD play an Engine-defined default sound.
+
+\subsubsection{Command}
+This is a special type of object.  It must directly follow a Zone or ZItem object, or another Command object.  The command is added to the Zone or ZItem that it follows, in its Commands attribute.  The following keys are allowed for Command: \textit{Text}, \textit{CmdWith}, \textit{WorksWithAll}, \textit{WorksWithList} and \textit{EmptyTargetListText}.  The value of WorksWithList is a space separated list of object identifiers.
 
 \subsection{Example cartridge}
 \subsubsection{Lua file}
 \noindent\begin{lstlisting}
 require "Wherigo"
 
-cartridge = Wherigo.ZCartridge ()
-
 function cartridge:OnStart ()
-	Wherigo.PlayAudio (cartridge.Sound.bell)
+	Wherigo.PlayAudio (bell)
 	Wherigo.Dialog {{Text = "Look at me!",
-		Media = cartridge.Image.dude},}
+		Media = Image.dude},}
 end
 
 return cartridge
 \end{lstlisting}
 \subsubsection{gwi file}
 \noindent\begin{lstlisting}
+Format: 1.0
+ZCartridge: cartridge
 Name: Example Cartridge
 	This is an example cartridge header,
 	showing how it is built up.
@@ -523,8 +573,8 @@ StartingLocation: 53.0 6.0 0
 	Go there and see farmland!
 \end{lstlisting}
 
-In the file, bell.wav and dude.jpg are also packaged. They do not need to be
-mentioned in the gwi-file.
+In the file, Media/bell.wav and Media/Image/dude.jpg are also packaged. They do
+not need to be mentioned in the gwi-file.
 
 \subsection{Saved game: ?}
 The format for this file still has to be decided, if it is going to be
